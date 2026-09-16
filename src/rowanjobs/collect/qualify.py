@@ -50,7 +50,12 @@ class ScanFacts:
     structure_unrecognized_pages: list[int] = field(default_factory=list)
     termination_reason: str | None = None
     unresolved_candidates: int = 0
+    # Pages whose FINAL response was an access-control answer: coverage lost.
     access_control_pages: list[int] = field(default_factory=list)
+    # Pages that were challenged but then retrieved completely after backing
+    # off. Coverage is intact, so this does not fail the scan -- but it is
+    # recorded so "the source pushed back" is never invisible.
+    challenged_then_recovered: list[int] = field(default_factory=list)
     unexpected_redirect_pages: list[dict[str, Any]] = field(default_factory=list)
     non_200_pages: list[dict[str, Any]] = field(default_factory=list)
     unique_ids: int = 0
@@ -122,8 +127,13 @@ def assess(facts: ScanFacts) -> Assessment:
         Check(
             "no_access_control_response",
             not facts.access_control_pages,
-            "no page was answered with a challenge, block or rate-limit response",
-            {"pages": facts.access_control_pages},
+            "no page ended in a challenge, block or rate-limit response",
+            {
+                "pages_unrecovered": facts.access_control_pages,
+                "pages_challenged_then_recovered": facts.challenged_then_recovered,
+                "note": "a page that was challenged and then retrieved completely "
+                "still has full coverage; it is listed here for visibility only",
+            },
         )
     )
 

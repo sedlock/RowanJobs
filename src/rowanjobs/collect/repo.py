@@ -226,7 +226,18 @@ class Repository:
     # ---------------------------------------------------------------- fetches
 
     def record_fetch(self, result: FetchResult, run_id: int | None) -> tuple[int, int | None]:
-        """Archive the payload and persist the retrieval attempt. Returns ids."""
+        """Archive the payload and persist the retrieval attempt.
+
+        Superseded attempts -- a challenge that was later worked around, a
+        timeout that a retry recovered from -- are recorded first. Losing them
+        would make the archive claim a clean single request where the source
+        actually pushed back.
+        """
+        for earlier in result.superseded_attempts:
+            self._insert_fetch(earlier, run_id)
+        return self._insert_fetch(result, run_id)
+
+    def _insert_fetch(self, result: FetchResult, run_id: int | None) -> tuple[int, int | None]:
         with self.db.write():
             artifact = self.archive.put_fetch(result, run_id)
             fetch_id = self.db.insert(

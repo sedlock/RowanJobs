@@ -276,6 +276,23 @@ class Collector:
         details = DetailCollector(cfg=cfg, repo=repo, client=client, run_id=run_id)
         deriver = EventDeriver(cfg=cfg, repo=repo)
 
+        # --- 0. access ------------------------------------------------------
+        # The source challenges token-less clients after a handful of requests.
+        # An ordinary visitor's browser resolves that on its first page load, so
+        # we do the same once, up front, rather than spending source requests
+        # being refused. Purely optional: without it the run still works, it just
+        # backs off when challenged.
+        priming = client.prime(self.cfg.listing_url)
+        if not priming.get("primed"):
+            errors.append(
+                {
+                    "kind": "access_priming_unavailable",
+                    "detail": priming.get("reason"),
+                    "note": "collection continues; challenges will be handled by "
+                    "backing off, which may reduce coverage",
+                }
+            )
+
         # --- 1. discovery ----------------------------------------------------
         discovery = self._scan(scanner, 1, "discovery", errors)
         union_ids: set[str] = set(discovery.unique_ids) if discovery else set()
@@ -372,6 +389,7 @@ class Collector:
         }
         coverage = {
             "baseline_run": is_baseline,
+            "access_priming": priming,
             "discovery_qualified": bool(discovery and discovery.qualified),
             "verification_qualified": bool(verification and verification.qualified),
             "absence_analysis_supported": bool(final_scan and not unresolved),

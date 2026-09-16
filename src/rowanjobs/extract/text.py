@@ -194,14 +194,23 @@ class _Renderer:
             self.emit(self._text(node.tail))
 
     def _text(self, value: str) -> str:
-        return value if self._pre_depth else _collapse(value)
+        if not self._pre_depth:
+            return _collapse(value)
+        # Hold the run aside behind a placeholder: the whitespace tidying in
+        # result() operates on the assembled document and would otherwise reach
+        # inside a <pre>, where every space is content rather than indentation.
+        self._preserved.append(value)
+        return f"\x00{len(self._preserved) - 1}\x00"
 
     def result(self) -> str:
         text = "".join(self.out)
         text = _TRAILING_WS.sub("\n", text)
         text = _LEADING_WS.sub("\n", text)
         text = _MANY_NEWLINES.sub("\n\n", text)
-        return text.strip("\n").strip(" \t")
+        text = text.strip("\n").strip(" \t")
+        if self._preserved:
+            text = _PRESERVED.sub(lambda m: self._preserved[int(m.group(1))], text)
+        return text
 
 
 def html_to_text(fragment: html.HtmlElement) -> str:

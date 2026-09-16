@@ -237,6 +237,8 @@ class ListingScanner:
 
         if fetch.access_control_signal:
             facts.access_control_pages.append(page)
+        elif any(a.access_control_signal for a in fetch.superseded_attempts):
+            facts.challenged_then_recovered.append(page)
         if fetch.http_status is not None and fetch.http_status != 200:
             facts.non_200_pages.append({"page": page, "status": fetch.http_status})
         if fetch.redirect_chain:

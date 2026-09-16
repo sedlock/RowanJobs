@@ -119,6 +119,9 @@ class FetchResult:
     retry_after: str | None = None
     failure_kind: str | None = None
     failure_detail: str | None = None
+    # Every earlier attempt for this URL in this call, oldest first. A challenge
+    # that was later worked around is still evidence and is still archived.
+    superseded_attempts: list[FetchResult] = field(default_factory=list)
 
     @property
     def redirect_count(self) -> int:
@@ -204,6 +207,34 @@ class SourceClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
+    def prime(self, url: str) -> dict[str, object]:
+        """Obtain an access token before the first request.
+
+        The source answers token-less clients with an AWS WAF *challenge*. An
+        ordinary visitor's browser solves that silently on its first page load,
+        so doing the same up front is both gentler on the source -- no requests
+        spent being refused -- and a more faithful reproduction of the public
+        access path than repeatedly triggering the challenge.
+
+        Entirely optional: with no solver available this is a no-op and the
+        collector simply backs off when challenged.
+        """
+        if self.challenge_solver is None:
+            return {"primed": False, "reason": "no challenge solver configured"}
+        try:
+            cookies = self.challenge_solver.solve(url)
+        except Exception as exc:  # noqa: BLE001 - priming is best effort
+            return {"primed": False, "reason": f"{type(exc).__name__}: {exc}"}
+        if not cookies:
+            return {
+                "primed": False,
+                "reason": getattr(self.challenge_solver, "last_error", "no token issued"),
+            }
+        host = httpx.URL(url).host
+        for name, value in cookies.items():
+            self._client.cookies.set(name, value, domain=host)
+        return {"primed": True, "cookies": sorted(cookies)}
+
     def fetch(
         self,
         url: str,
@@ -263,7 +294,7 @@ class SourceClient:
         if self.challenge_solver is not None:
             self.challenge_solve_attempts += 1
             try:
-                cookies = self.challenge_solver.solve(result.requested_url)
+                cookies = self.challenge_solver.solve(result.requested_url, force=True)
             except Exception as exc:  # noqa: BLE001 - solver is best effort
                 result.failure_detail = f"challenge solver failed: {exc}"
                 cookies = None

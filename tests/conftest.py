@@ -182,7 +182,7 @@ def build_detail_page(
     work_type: str | None = "Temporary Part-Time",
     location: str | None = "Glassboro, New Jersey",
     categories: str | None = "Public Safety/Security",
-    extra_fields: tuple[tuple[str, str], ...] = (),
+    extra_fields: tuple[tuple[str, str | None], ...] = (),
     body_html: str = "<p>The advertisement body.</p>",
     include_job_details: bool = True,
     advertised: tuple[str, str] | None = ("Sep 15 2026 ", "2026-09-15T12:00:00Z"),
@@ -220,7 +220,9 @@ def build_detail_page(
         else:
             lines.append(f'  <b>{label}:</b> <span class="{css}">{value}</span><br>')
     for label, value_html in extra_fields:
-        lines.append(f"  <b>{label}</b> {value_html}<br>")
+        # None means the label is followed immediately by the line break, with
+        # no value node and not even a space: the "absent value" case.
+        lines.append(f"  <b>{label}</b><br>" if value_html is None else f"  <b>{label}</b> {value_html}<br>")
 
     details = f'<div id="job-details">\n{body_html}\n</div>' if include_job_details else ""
 

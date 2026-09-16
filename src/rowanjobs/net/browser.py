@@ -48,11 +48,16 @@ class ChallengeSolver:
             return False
         return True
 
-    def solve(self, url: str) -> dict[str, str] | None:
+    def solve(self, url: str, *, force: bool = False) -> dict[str, str] | None:
+        """Return access cookies, reusing a recent token unless ``force``.
+
+        ``force`` is used after an actual challenge: the token we hold has just
+        been rejected, so handing back the cached copy would only fail again.
+        """
         if not self.available():
             return None
         now = time.monotonic()
-        if self._cookies and (now - self.last_solved_at) < self.token_ttl_seconds:
+        if not force and self._cookies and (now - self.last_solved_at) < self.token_ttl_seconds:
             return dict(self._cookies)
         if self.solves >= self.max_solves:
             self.last_error = f"solver budget of {self.max_solves} reached for this run"
