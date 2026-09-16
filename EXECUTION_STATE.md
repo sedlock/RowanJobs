@@ -61,13 +61,14 @@ whenever a milestone completes or a blocker changes.
 - [x] SQLite runtime verification
 - [x] Schema + migrations
 - [x] Archive store, decoding, verbatim text contract, PageUp adapters
-- [ ] Collector orchestration
-- [ ] CLI
-- [ ] Backups / health / restore verification
-- [ ] Tests + CI
-- [ ] Deployment (systemd user units)
-- [ ] First production harvest
-- [ ] Verification run, manual inspection, acceptance report
+- [x] Collector orchestration
+- [x] CLI
+- [x] Backups / health / restore verification
+- [x] Tests + CI (378 fixture-based tests, 87% coverage)
+- [x] Deployment (systemd user units, timer enabled, lingering already on)
+- [x] First production harvest (run 2, 2026-09-16, success)
+- [x] Manual inspection of 13 archived advertisements across all 7 listing pages
+- [ ] Verification run, independent review, acceptance report
 - [ ] Push to GitHub
 
 ## Access-control findings (measured 2026-09-16)
@@ -108,3 +109,44 @@ A bounded live run confirmed the adapter against the real site: 7 listing pages,
 **266 source occurrences, 133 unique advertisements, 133 duplicate occurrences**
 from the repeated section, `source_reported_total = 133` reconciling exactly,
 termination `no_more_link`, and the scan **qualified** on all 11 checks.
+
+## First production harvest (run 2)
+
+Executed through the installed systemd unit (`systemctl --user start
+rowanjobs.service`), not the CLI directly.
+
+| Measure | Value |
+|---|---|
+| Started / ended (Eastern) | 2026-09-16 18:43:10 -> 18:54:05 EDT (10m 55s) |
+| Outcome | `success` |
+| Final qualified listing count | 133 |
+| Union encountered | 133 |
+| Listing traversals | 2 (discovery + verification), 7 pages each, both **qualified** |
+| Source occurrences seen | 266 (133 advertisements x 2 sections) |
+| Duplicate occurrences correctly ignored | 133 |
+| Source-reported total | 133 -- reconciles exactly |
+| Detail pages captured | 133 / 133 queued, 0 failed, 0 inconclusive |
+| Content versions created | 133 |
+| Identity mismatches | 0 |
+| HTTP requests | 148, 8.24 MB received, 0 retries, 1 challenge (recovered) |
+| Artifacts | 140 for 147 payload fetches (7 deduplicated) |
+| Payload bytes | 7.60 MB uncompressed -> 2.28 MB stored (3.3x) |
+| Backup | created and VERIFIED |
+
+Run 1 was the interrupted attempt (browser could not start under the sandbox);
+it was correctly marked `aborted` by the next run and its evidence preserved.
+
+Notable real-world data: **14 of 133 advertisements have an explicitly blank
+`Applications close`** -- recorded as `field_state='blank'`,
+`date_parse_state='absent'`, with no invented deadline. All 133 `Advertised`
+values are date-only precision with the source's own 12:00Z placeholder in the
+`datetime` attribute, recorded as `source_precision='date'`.
+
+## Manual inspection (13 advertisements, listing pages 1-7)
+
+Verified independently of the production parser, straight from the archived
+bytes: `description_html` is a byte-exact substring of the decoded archived
+document in every case; every source paragraph survives in `description_text`
+with no substantive characters lost or invented; job number and title agree with
+the raw markup; the listing summary is preserved separately from the detail
+description.

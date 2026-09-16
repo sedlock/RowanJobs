@@ -463,3 +463,33 @@ def test_diff_reports_what_changed_between_two_content_versions(
     assert payload["contract_version"] == "1.0.0"
     assert any(line.startswith("+Edited wording.") for line in payload["unified_diff"])
     assert "parser upgrade cannot appear here as a source edit" in payload["note"]
+
+
+def test_doctor_reports_a_rejected_configuration_instead_of_crashing(tmp_path, capsys) -> None:
+    """Finding a bad config is doctor's job, so it must survive one.
+
+    A key removed or renamed by an upgrade would otherwise make every command,
+    including the scheduled collection, fail with a traceback-shaped exit.
+    """
+    bad = tmp_path / "config.toml"
+    bad.write_text("[network]\nnot_a_real_key = 1\n", encoding="utf-8")
+
+    code = main(["--config", str(bad), "doctor"])
+
+    assert code == 5
+    out = capsys.readouterr().out
+    assert "configuration: FAILED" in out
+    assert "not_a_real_key" in out
+
+
+def test_doctor_reports_a_rejected_configuration_as_json(tmp_path, capsys) -> None:
+    bad = tmp_path / "config.toml"
+    bad.write_text("[collection]\nmystery = true\n", encoding="utf-8")
+
+    code = main(["doctor", "--config", str(bad), "--json"])
+
+    assert code == 5
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["failures"] == ["configuration"]
+    assert payload["checks"][0]["name"] == "configuration"

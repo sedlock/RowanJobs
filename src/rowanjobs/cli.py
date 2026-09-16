@@ -94,7 +94,25 @@ def _git_revision(root: Path) -> tuple[str | None, bool | None]:
 def cmd_doctor(args: argparse.Namespace) -> int:
     from .ops.doctor import run_doctor
 
-    cfg = _config_from(args)
+    try:
+        cfg = _config_from(args)
+    except ValueError as exc:
+        # The whole point of doctor is to find this before the timer does, so a
+        # rejected configuration is a reported check, not a crash.
+        report = {
+            "app_version": __version__,
+            "checked_at_utc": utc_str(),
+            "checked_at_local": local_str(utc_str()),
+            "config_path": args.config,
+            "ok": False,
+            "failures": ["configuration"],
+            "checks": [{"name": "configuration", "ok": False, "detail": str(exc)}],
+        }
+        if args.json:
+            emit(report, True)
+        else:
+            line(f"configuration: FAILED — {exc}")
+        return EXIT_USAGE
     report = run_doctor(cfg)
     if args.json:
         emit(report, True)
