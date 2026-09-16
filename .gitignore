@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# RowanJobs production data must never enter Git.
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+/archive/
+/backups/
+/logs/
+/runtime/
+/var/
+/source-audit/
+/exports/
+health.json
+deployment.json
+
+# Local config / secrets
+.env
+*.local.toml
+config.local.*
+secrets.*
