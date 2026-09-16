@@ -13,6 +13,7 @@ import apsw
 import pytest
 
 from rowanjobs.config import Config
+from rowanjobs.constants import FIELD_STATES
 from rowanjobs.db import Database, ReadOnlyError, open_db, open_readonly, runtime_info
 from rowanjobs.db.migrations import (
     MIGRATIONS,
@@ -22,7 +23,6 @@ from rowanjobs.db.migrations import (
     pending,
 )
 from rowanjobs.db.runtime import wal_reset_bug_fixed
-
 
 # ------------------------------------------------------- WAL-reset bug matrix
 
@@ -111,7 +111,12 @@ def test_expected_tables_and_views_exist(db: Database) -> None:
         "version_values",
         "work_queue",
     } <= objects
-    assert {"v_posting_current", "v_posting_history", "v_qualified_scans", "v_run_health"} <= objects
+    assert {
+        "v_posting_current",
+        "v_posting_history",
+        "v_qualified_scans",
+        "v_run_health",
+    } <= objects
 
 
 def test_foreign_keys_are_enforced_on_every_connection(db: Database) -> None:
@@ -136,9 +141,8 @@ def test_check_constraints_reject_states_outside_the_documented_enumerations(
 
 
 def test_nested_write_transactions_are_refused(db: Database) -> None:
-    with pytest.raises(RuntimeError, match="nested"), db.write():
-        with db.write():
-            pass
+    with pytest.raises(RuntimeError, match="nested"), db.write(), db.write():
+        pass
 
 
 def test_failed_write_transaction_rolls_back(db: Database) -> None:
@@ -160,8 +164,10 @@ def test_open_readonly_refuses_every_write_path(cfg: Config, db: Database) -> No
     try:
         assert ro.readonly is True
         with pytest.raises(ReadOnlyError):
-            ro.execute("INSERT INTO sources(namespace, display_name, base_url, adapter, "
-                       "created_at_utc) VALUES ('x','x','x','x','x')")
+            ro.execute(
+                "INSERT INTO sources(namespace, display_name, base_url, adapter, "
+                "created_at_utc) VALUES ('x','x','x','x','x')"
+            )
         with pytest.raises(ReadOnlyError), ro.write():
             pass
         with pytest.raises(apsw.ReadOnlyError):
@@ -200,3 +206,55 @@ def test_integrity_and_foreign_key_checks_are_clean_on_a_fresh_archive(db: Datab
     assert db.integrity_check() == ["ok"]
     assert db.foreign_key_check() == []
     assert db.page_bytes() > 0
+
+
+def test_version_values_accept_every_documented_field_state(
+    db: Database, repo, cfg: Config, run_environment
+) -> None:
+    """``unresolved`` is reserved for a structure the parser could not validate."""
+    posting_id, _created = repo.ensure_posting(
+        source_id=run_environment["source_id"],
+        external_job_id="1001",
+        run_id=run_environment["run_id"],
+        discovery_basis="baseline",
+        observed_at_utc="2026-09-16T10:00:00Z",
+    )
+    with db.write():
+        version_id = db.insert(
+            "INSERT INTO posting_versions(posting_id, contract_version, text_contract_version, "
+            "content_fingerprint, description_text_fingerprint, description_html_fingerprint, "
+            "metadata_fingerprint, description_html_kind, first_seen_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                posting_id,
+                "1.0.0",
+                "1.0.0",
+                "fp",
+                "fp",
+                "fp",
+                "fp",
+                "absent",
+                "2026-09-16T10:00:00Z",
+            ),
+        )
+    for ordinal, state in enumerate(FIELD_STATES):
+        with db.write():
+            db.execute(
+                "INSERT INTO version_values(posting_version_id, field_key, ordinal, "
+                "field_state, origin) VALUES (?,?,?,?,?)",
+                (version_id, "location", ordinal, state, "detail_labelled"),
+            )
+    stored = {
+        r["field_state"]
+        for r in db.query(
+            "SELECT field_state FROM version_values WHERE posting_version_id = ?", (version_id,)
+        )
+    }
+    assert stored == set(FIELD_STATES) == {"present", "blank", "absent", "unresolved"}
+
+    with pytest.raises(apsw.ConstraintError), db.write():
+        db.execute(
+            "INSERT INTO version_values(posting_version_id, field_key, ordinal, "
+            "field_state, origin) VALUES (?,?,?,?,?)",
+            (version_id, "location", 99, "probably", "detail_labelled"),
+        )

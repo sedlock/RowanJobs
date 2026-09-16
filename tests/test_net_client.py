@@ -345,3 +345,101 @@ def test_blocked_destination_is_refused_before_any_connection(make_client) -> No
     assert result.failure_kind == "blocked_destination"
     assert source.requests == []
     assert result.response_state == "no_response"
+
+
+# -------------------------------------------------------------------- priming
+
+
+def test_priming_without_a_solver_is_a_no_op_that_costs_no_request(make_client) -> None:
+    source = FakeSource()
+    client = make_client(source)
+
+    result = client.prime(LISTING_URL)
+
+    assert result == {
+        "primed": False,
+        "required": True,
+        "reason": "no challenge solver configured",
+    }
+    assert source.requests == []
+
+
+def test_priming_installs_the_token_the_browser_step_returned(make_client) -> None:
+    class StubSolver:
+        last_error = None
+
+        def solve(self, _url: str) -> dict[str, str]:
+            return {"aws-waf-token": "issued-token"}
+
+    source = FakeSource()
+    source.add(LISTING_URL, html_response("<html>ok</html>"))
+    client = make_client(source, challenge_solver=StubSolver())
+
+    result = client.prime(LISTING_URL)
+
+    assert result["primed"] is True
+    assert result["cookies"] == ["aws-waf-token"]
+    assert source.requests == []
+    client.fetch(LISTING_URL, purpose="listing_page")
+    assert source.requests[0].headers.get("cookie") == "aws-waf-token=issued-token"
+
+
+def test_a_solver_that_cannot_issue_a_token_is_reported_not_hidden(make_client) -> None:
+    class FailingSolver:
+        last_error = "browser visit produced no access token"
+
+        def solve(self, _url: str) -> None:
+            return None
+
+    client = make_client(FakeSource(), challenge_solver=FailingSolver())
+
+    result = client.prime(LISTING_URL)
+
+    assert result["primed"] is False
+    assert result["reason"] == "browser visit produced no access token"
+
+
+def test_a_challenge_that_a_retry_recovered_from_is_still_archived(make_client) -> None:
+    """The archive must not show a clean single request where the source pushed back.
+
+    A challenge that a later attempt worked around is evidence of how the source
+    behaved. Recording only the attempt that happened to succeed would make the
+    archive quietly overstate how smoothly collection went.
+    """
+    source = FakeSource()
+    source.add(
+        LISTING_URL,
+        challenge_response(),
+        challenge_response(),
+        html_response("<html>ok</html>"),
+    )
+    client = make_client(source)
+
+    result = client.fetch(LISTING_URL, purpose="listing_page")
+
+    assert result.ok
+    assert result.attempt_no == 3
+    assert [a.access_control_signal for a in result.superseded_attempts] == [
+        "aws-waf-challenge",
+        "aws-waf-challenge",
+    ]
+    assert [a.attempt_no for a in result.superseded_attempts] == [1, 2]
+
+
+def test_superseded_attempts_reach_the_archive_as_their_own_fetch_rows(make_client, db) -> None:
+    from rowanjobs.collect.repo import Repository
+
+    source = FakeSource()
+    source.add(LISTING_URL, challenge_response(), html_response("<html>ok</html>"))
+    client = make_client(source)
+
+    result = client.fetch(LISTING_URL, purpose="listing_page")
+    Repository(db).record_fetch(result, None)
+
+    rows = db.query(
+        "SELECT attempt_no, http_status, access_control_signal FROM fetches ORDER BY fetch_id"
+    )
+    assert [(r["attempt_no"], r["access_control_signal"]) for r in rows] == [
+        (1, "aws-waf-challenge"),
+        (2, None),
+    ]

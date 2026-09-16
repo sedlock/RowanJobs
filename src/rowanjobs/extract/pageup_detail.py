@@ -475,12 +475,18 @@ def classify_link(url: str, anchor: html.HtmlElement) -> tuple[str, str, str | N
         return "apply_workflow", "exclude", "application submission workflow is never followed"
 
     if path.endswith(DOCUMENT_SUFFIXES):
-        if host.endswith("jobs.rowan.edu"):
+        # A document linked from inside an advertisement is a job-specific
+        # attachment, not a crawl target. Rowan hosts these across its own
+        # subdomains (engineering.rowan.edu, sites.rowan.edu, ...), so the
+        # employer's domain is in scope. Third-party documents stay out: the
+        # link and the reason are preserved instead.
+        if host == "rowan.edu" or host.endswith(".rowan.edu"):
             return "job_document", "fetch", None
         return (
             "job_document",
             "exclude",
-            f"document is hosted off the career site ({host}); outside the v1 fetch scope",
+            f"document is hosted outside Rowan's own domain ({host}); the link is "
+            "preserved but v1 does not retrieve third-party files",
         )
 
     if host.endswith("jobs.rowan.edu"):

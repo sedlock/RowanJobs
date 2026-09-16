@@ -220,20 +220,29 @@ class SourceClient:
         collector simply backs off when challenged.
         """
         if self.challenge_solver is None:
-            return {"primed": False, "reason": "no challenge solver configured"}
+            return {
+                "primed": False,
+                "required": True,
+                "reason": "no challenge solver configured",
+            }
         try:
             cookies = self.challenge_solver.solve(url)
         except Exception as exc:  # noqa: BLE001 - priming is best effort
-            return {"primed": False, "reason": f"{type(exc).__name__}: {exc}"}
+            return {"primed": False, "required": True, "reason": f"{type(exc).__name__}: {exc}"}
         if not cookies:
-            return {
-                "primed": False,
-                "reason": getattr(self.challenge_solver, "last_error", "no token issued"),
-            }
+            error = getattr(self.challenge_solver, "last_error", None)
+            if error is None:
+                return {
+                    "primed": False,
+                    "required": False,
+                    "reason": "the page loaded normally and the source issued no "
+                    "access token; none is needed until it challenges",
+                }
+            return {"primed": False, "required": True, "reason": error}
         host = httpx.URL(url).host
         for name, value in cookies.items():
             self._client.cookies.set(name, value, domain=host)
-        return {"primed": True, "cookies": sorted(cookies)}
+        return {"primed": True, "required": True, "cookies": sorted(cookies)}
 
     def fetch(
         self,
@@ -243,9 +252,20 @@ class SourceClient:
         max_bytes: int | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> FetchResult:
-        """Retrieve ``url``, retrying transient failures within the budget."""
+        """Retrieve ``url``, retrying transient failures within the budget.
+
+        Superseded attempts are carried on the returned result. A challenge that
+        a later attempt worked around, or a timeout a retry recovered from, is
+        still evidence of how the source behaved, and the archive would be
+        misleading if it recorded only the attempt that happened to succeed.
+        """
         attempt = 0
-        last: FetchResult | None = None
+        earlier: list[FetchResult] = []
+
+        def finish(result: FetchResult) -> FetchResult:
+            result.superseded_attempts = earlier
+            return result
+
         while True:
             attempt += 1
             result = self._attempt(
@@ -255,29 +275,28 @@ class SourceClient:
                 max_bytes=max_bytes if max_bytes is not None else self.max_bytes,
                 extra_headers=extra_headers,
             )
-            last = result
 
             if result.access_control_signal:
                 if not self._handle_challenge(result, attempt):
-                    return result
+                    return finish(result)
+                earlier.append(result)
                 continue
 
             if result.ok or not self._retryable(result):
                 if result.ok:
                     self.budget.record_success()
-                return result
+                return finish(result)
 
             if attempt > self.max_retries:
-                return result
+                return finish(result)
 
             self.budget.record_retry()
             delay = min(self.backoff_base**attempt, self.backoff_max)
             if result.retry_after:
                 with contextlib.suppress(ValueError):
                     delay = max(delay, float(result.retry_after))
+            earlier.append(result)
             self.budget.backoff(delay)
-
-        return last  # pragma: no cover - unreachable
 
     # ---------------------------------------------------------------- private
 

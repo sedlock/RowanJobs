@@ -63,7 +63,9 @@ def test_small_payloads_are_stored_uncompressed_without_changing_identity(
 ) -> None:
     data = b"tiny"
     stored = put(store, data)
-    row = db.one("SELECT compression, blob FROM artifacts WHERE artifact_id = ?", (stored.artifact_id,))
+    row = db.one(
+        "SELECT compression, blob FROM artifacts WHERE artifact_id = ?", (stored.artifact_id,)
+    )
     assert row["compression"] == "none"
     assert bytes(row["blob"]) == data
     assert stored.sha256 == content_hash(data)
@@ -90,9 +92,7 @@ def test_partial_capture_keeps_its_exception_on_the_artifact(
     assert row["capture_exception"] == "response exceeded the limit"
 
 
-def test_decoded_body_representation_is_recorded_as_such(
-    store: ArchiveStore, db: Database
-) -> None:
+def test_decoded_body_representation_is_recorded_as_such(store: ArchiveStore, db: Database) -> None:
     stored = put(
         store,
         b"body" * 100,

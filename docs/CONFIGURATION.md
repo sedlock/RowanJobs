@@ -79,7 +79,7 @@ rather than per-module wishful thinking.
 | `max_resource_bytes` | `52428800` (50 MiB) | Ceiling for a linked document. Exceeding it yields resource outcome `too_large`. |
 | `max_redirects` | `5` | Redirects are followed **manually** so every hop is guarded and preserved as evidence. |
 | `allowed_hosts` | `["jobs.rowan.edu", "careers-static.pageuppeople.com"]` | The only hosts a connection may be opened to. Exact matches; subdomains are not implied. Every URL, including every redirect target, is checked before a socket is opened (`src/rowanjobs/net/guard.py`). |
-| `resource_hosts` | `["jobs.rowan.edu"]` | Hosts whose documents count as job-specific resources worth archiving. |
+| `allow_subdomains` | `true` | Match subdomains of `allowed_hosts`, so a job document on `engineering.rowan.edu` is reachable. |
 
 ## `[browser]` — optional challenge step
 
@@ -215,7 +215,7 @@ max_redirects = 5
 # The only hosts a socket may be opened to. Exact match; subdomains are not
 # implied. Checked again on every redirect target.
 allowed_hosts  = ["jobs.rowan.edu", "careers-static.pageuppeople.com"]
-resource_hosts = ["jobs.rowan.edu"]
+allow_subdomains = true
 
 
 [browser]

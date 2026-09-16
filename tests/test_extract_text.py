@@ -98,9 +98,7 @@ def test_script_style_and_comments_are_not_rendered(fidelity_text: str) -> None:
 
 
 def test_entities_are_decoded_to_the_characters_they_denote() -> None:
-    assert _text("<div><p>AT&amp;T &lt;tag&gt; &#8212; &#160;</p></div>") == (
-        "AT&T <tag> —  "
-    )
+    assert _text("<div><p>AT&amp;T &lt;tag&gt; &#8212; &#160;</p></div>") == ("AT&T <tag> —  ")
 
 
 def test_source_indentation_collapses_but_words_and_single_spaces_survive() -> None:

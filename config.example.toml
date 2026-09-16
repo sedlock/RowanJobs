@@ -35,9 +35,12 @@ http2 = true
 max_response_bytes = 26214400
 max_resource_bytes = 52428800
 max_redirects = 5
-# Only these hosts may be contacted. Redirects to anything else are refused.
-allowed_hosts = ["jobs.rowan.edu", "careers-static.pageuppeople.com"]
-resource_hosts = ["jobs.rowan.edu"]
+# Only these hosts may be contacted. Redirects to anything else are refused
+# before a connection is opened. "rowan.edu" is reachable only for job documents
+# linked from inside an advertisement; no Rowan page is ever requested otherwise.
+allowed_hosts = ["jobs.rowan.edu", "careers-static.pageuppeople.com", "rowan.edu"]
+# Match subdomains of the entries above (engineering.rowan.edu, sites.rowan.edu).
+allow_subdomains = true
 
 [browser]
 # Used ONLY to satisfy an AWS WAF challenge the way an ordinary visitor's

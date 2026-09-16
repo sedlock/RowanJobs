@@ -52,12 +52,17 @@ class NetworkConfig:
     max_response_bytes: int = 25 * 1024 * 1024
     max_resource_bytes: int = 50 * 1024 * 1024
     max_redirects: int = 5
+    # Destinations the collector may contact at all. Everything else -- including
+    # a redirect target -- is refused before a connection is opened.
     allowed_hosts: tuple[str, ...] = (
         "jobs.rowan.edu",
         "careers-static.pageuppeople.com",
+        # Reachable only for job documents linked from inside an advertisement;
+        # the adapter never requests a Rowan page for any other reason.
+        "rowan.edu",
     )
-    # Hosts whose documents count as job-specific resources worth archiving.
-    resource_hosts: tuple[str, ...] = ("jobs.rowan.edu",)
+    # Match subdomains of the entries above (engineering.rowan.edu, ...).
+    allow_subdomains: bool = True
 
 
 @dataclass(slots=True)

@@ -299,11 +299,7 @@ def test_redirect_to_another_job_never_attaches_that_description_to_this_posting
     assert "NOT assigned to the expected posting" in conflicts[0]["note"]
     # The destination's title is nowhere in this posting's archived content.
     assert (
-        int(
-            db.scalar(
-                "SELECT COUNT(*) FROM posting_versions WHERE posting_id = ?", (posting_a,)
-            )
-        )
+        int(db.scalar("SELECT COUNT(*) FROM posting_versions WHERE posting_id = ?", (posting_a,)))
         == 0
     )
 
@@ -566,15 +562,15 @@ def test_a_resource_over_the_size_limit_is_a_partial_capture_never_a_complete_on
     assert resource["outcome"] == "too_large"
     assert "exceeded" in str(resource["outcome_detail"])
     assert int(resource["byte_length"]) == 64
-    artifact = db.one(
-        "SELECT * FROM artifacts WHERE artifact_id = ?", (resource["artifact_id"],)
-    )
+    artifact = db.one("SELECT * FROM artifacts WHERE artifact_id = ?", (resource["artifact_id"],))
     assert artifact["capture_state"] == "partial"
     assert artifact["capture_exception"] is not None
     assert artifact["capture_state"] != "complete"
     fetch = db.one("SELECT * FROM fetches WHERE fetch_id = ?", (resource["fetch_id"],))
     assert fetch["response_state"] == "partial"
-    assert int(db.scalar("SELECT COUNT(*) FROM resource_observations WHERE outcome='captured'")) == 0
+    assert (
+        int(db.scalar("SELECT COUNT(*) FROM resource_observations WHERE outcome='captured'")) == 0
+    )
 
 
 def test_a_failed_resource_retrieval_is_recorded_with_its_reason(
@@ -646,6 +642,50 @@ def test_resource_capture_can_be_switched_off_for_a_run(
     assert outcome.resources == []
     assert source.urls == [URL_A]
     # The link is still classified and recorded as fetchable evidence.
-    assert int(
-        db.scalar("SELECT COUNT(*) FROM resource_links WHERE collection_decision = 'fetch'")
-    ) >= 1
+    assert (
+        int(db.scalar("SELECT COUNT(*) FROM resource_links WHERE collection_decision = 'fetch'"))
+        >= 1
+    )
+
+
+def test_a_document_edited_at_the_same_url_is_captured_twice_with_its_own_times(
+    collector, register, db: Database, advancing_clock
+) -> None:
+    posting_id = register(JOB_A, URL_A)
+    pdf_url = "https://jobs.rowan.edu/documents/jd.pdf"
+    detail_markup = build_detail_page(
+        job_id=JOB_A, body_html='<p><a href="/documents/jd.pdf">Position description</a></p>'
+    )
+    source = FakeSource()
+    source.page(URL_A, detail_markup)
+    source.add(
+        pdf_url,
+        bytes_response(b"%PDF-1.7 first revision"),
+        bytes_response(b"%PDF-1.7 SECOND revision, materially different"),
+    )
+
+    for _run in range(2):
+        collector(source).collect(
+            external_job_id=JOB_A, url=URL_A, posting_id=posting_id, checked_because="listed"
+        )
+
+    resources = db.query(
+        "SELECT * FROM resource_observations WHERE url_resolved = ? ORDER BY resource_observation_id",
+        (pdf_url,),
+    )
+    assert len(resources) == 2
+    assert resources[0]["content_sha256"] != resources[1]["content_sha256"]
+    assert resources[0]["observed_at_utc"] != resources[1]["observed_at_utc"]
+    assert all(r["outcome"] == "captured" for r in resources)
+    # Each retrieval carries its own time, taken from its own fetch.
+    for row in resources:
+        fetch = db.one("SELECT * FROM fetches WHERE fetch_id = ?", (row["fetch_id"],))
+        assert row["observed_at_utc"] == fetch["started_at_utc"]
+    # Both revisions are archived; the unchanged parent page is stored once.
+    assert int(db.scalar("SELECT COUNT(DISTINCT artifact_id) FROM resource_observations")) == 2
+    assert int(db.scalar("SELECT COUNT(*) FROM posting_versions")) == 1
+    parent_artifacts = db.query(
+        "SELECT DISTINCT artifact_id FROM fetches WHERE purpose = 'posting_detail'"
+    )
+    assert len(parent_artifacts) == 1
+    assert int(db.scalar("SELECT COUNT(*) FROM posting_observations")) == 2

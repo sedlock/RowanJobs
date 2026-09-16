@@ -93,7 +93,9 @@ def _listing_rows(jobs: list[dict[str, Any]], *, comment_summaries: bool) -> str
             "    </tr>"
         )
         if row["summary"]:
-            summary = f'    <tr class="summary">\n      <td colspan="3">{row["summary"]}</td>\n    </tr>'
+            summary = (
+                f'    <tr class="summary">\n      <td colspan="3">{row["summary"]}</td>\n    </tr>'
+            )
             out.append(f"    <!--{summary}-->" if comment_summaries else summary)
     return "\n".join(out)
 
@@ -205,9 +207,7 @@ def build_detail_page(
     lines: list[str] = []
     if job_id is not None:
         span_value = job_id if job_no_span is None else job_no_span
-        lines.append(
-            f'  <b>Job no:</b> <span class="job-externalJobNo">{span_value}</span><br>'
-        )
+        lines.append(f'  <b>Job no:</b> <span class="job-externalJobNo">{span_value}</span><br>')
     for label, css, value in (
         ("Work type", "work-type", work_type),
         ("Location", "location", location),
@@ -222,7 +222,9 @@ def build_detail_page(
     for label, value_html in extra_fields:
         # None means the label is followed immediately by the line break, with
         # no value node and not even a space: the "absent value" case.
-        lines.append(f"  <b>{label}</b><br>" if value_html is None else f"  <b>{label}</b> {value_html}<br>")
+        lines.append(
+            f"  <b>{label}</b><br>" if value_html is None else f"  <b>{label}</b> {value_html}<br>"
+        )
 
     details = f'<div id="job-details">\n{body_html}\n</div>' if include_job_details else ""
 

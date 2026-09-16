@@ -44,9 +44,7 @@ def make_source(jobs: dict[str, str], **detail_kwargs: Any) -> FakeSource:
     source = FakeSource()
     source.page(LISTING_URL, listing_markup(jobs))
     for job_id, title in jobs.items():
-        source.page(
-            job_url(job_id), build_detail_page(job_id=job_id, title=title, **detail_kwargs)
-        )
+        source.page(job_url(job_id), build_detail_page(job_id=job_id, title=title, **detail_kwargs))
     return source
 
 
@@ -65,9 +63,7 @@ def events(db: Database, kind: str | None = None) -> list[dict[str, Any]]:
 # ------------------------------------------------------------------ baseline
 
 
-def test_a_complete_run_collects_listings_details_and_derived_events(
-    collect, db: Database
-) -> None:
+def test_a_complete_run_collects_listings_details_and_derived_events(collect, db: Database) -> None:
     source = make_source({"1001": "Telecommunicator", "1002": "Parking Clerk"})
 
     result = collect(source)
@@ -116,9 +112,7 @@ def test_two_advertisements_with_the_same_title_stay_separate_postings(
     assert int(db.scalar("SELECT COUNT(*) FROM posting_versions")) == 2
 
 
-def test_same_identifier_with_a_new_title_and_url_stays_one_posting(
-    collect, db: Database
-) -> None:
+def test_same_identifier_with_a_new_title_and_url_stays_one_posting(collect, db: Database) -> None:
     first = FakeSource()
     first.page(LISTING_URL, listing_markup({"1001": "Original Title"}))
     first.page(job_url("1001"), build_detail_page(job_id="1001", title="Original Title"))
@@ -179,9 +173,12 @@ def test_a_source_change_between_passes_is_reconciled_rather_than_averaged(
     ]
     assert roles == ["discovery", "verification", "reconciliation"]
     # The advertisement that appeared late was still retrieved this run.
-    assert db.one(
-        "SELECT * FROM posting_observations WHERE expected_external_job_id = '1003'"
-    )["availability_state"] == "content_captured"
+    assert (
+        db.one("SELECT * FROM posting_observations WHERE expected_external_job_id = '1003'")[
+            "availability_state"
+        ]
+        == "content_captured"
+    )
 
 
 def test_identical_counts_with_different_identifiers_do_not_count_as_a_match(
@@ -255,9 +252,7 @@ def test_a_qualified_scan_that_no_longer_lists_a_posting_records_an_absence(
     assert int(result.counts["events"]["absent_qualified"]) == 1
 
 
-def test_a_partial_collection_records_a_coverage_gap_and_no_absence(
-    collect, db: Database
-) -> None:
+def test_a_partial_collection_records_a_coverage_gap_and_no_absence(collect, db: Database) -> None:
     collect(make_source({"1001": "Stays", "1002": "Goes away"}))
 
     broken = FakeSource()
@@ -323,9 +318,7 @@ def test_a_past_deadline_on_a_still_listed_advertisement_invents_no_closure(
     result = collect(source)
 
     assert result.outcome == "success"
-    closes = db.one(
-        "SELECT * FROM version_values WHERE field_key = 'applications_close' LIMIT 1"
-    )
+    closes = db.one("SELECT * FROM version_values WHERE field_key = 'applications_close' LIMIT 1")
     assert closes["parsed_utc"] == "2026-09-02T03:55:00Z"
     observation = db.one("SELECT * FROM posting_observations LIMIT 1")
     assert observation["availability_state"] == "content_captured"
@@ -430,7 +423,9 @@ def test_an_interrupted_run_is_marked_aborted_and_its_evidence_survives(
 
     # Nothing from the first run was lost or duplicated.
     assert (
-        int(db.scalar("SELECT COUNT(*) FROM posting_observations WHERE run_id = ?", (first.run_id,)))
+        int(
+            db.scalar("SELECT COUNT(*) FROM posting_observations WHERE run_id = ?", (first.run_id,))
+        )
         == observations_before
     )
     assert int(db.scalar("SELECT COUNT(*) FROM artifacts")) == artifacts_before
@@ -467,14 +462,13 @@ def test_a_detail_failure_is_retried_then_recorded_without_failing_the_run(
 
     assert result.outcome == "partial"
     assert result.counts["detail_uncertain"] >= 1
-    queue = db.query(
-        "SELECT state, attempts FROM work_queue WHERE run_id = ?", (result.run_id,)
-    )
+    queue = db.query("SELECT state, attempts FROM work_queue WHERE run_id = ?", (result.run_id,))
     assert queue[0]["state"] == "failed"
     assert int(queue[0]["attempts"]) == 2
     assert int(db.scalar("SELECT COUNT(*) FROM posting_observations")) == 2
     assert {
-        r["availability_state"] for r in db.query("SELECT availability_state FROM posting_observations")
+        r["availability_state"]
+        for r in db.query("SELECT availability_state FROM posting_observations")
     } == {"retrieval_failed"}
 
 
@@ -533,9 +527,7 @@ def test_an_inconclusive_check_never_advances_the_demotion_streak(
     assert "inconclusive" in str(row["reason"])
 
 
-def test_a_relisted_posting_returns_to_daily_rechecking(
-    collect, cfg: Config, db: Database
-) -> None:
+def test_a_relisted_posting_returns_to_daily_rechecking(collect, cfg: Config, db: Database) -> None:
     cfg.collection.terminal_observations_before_weekly = 1
     collect(make_source({"1001": "A", "1002": "B"}))
     gone = make_source({"1001": "A"})

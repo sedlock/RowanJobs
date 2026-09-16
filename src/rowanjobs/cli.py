@@ -288,7 +288,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     db = _open_ro(cfg)
     try:
         runs = db.query(
-            "SELECT run_id, run_kind, attempt_no, outcome, parent_run_id "
+            "SELECT run_id, run_kind, attempt_no, outcome, parent_run_id, ended_at_utc "
             "FROM collection_runs WHERE scheduled_slot_local_date = ? "
             "AND run_kind IN ('daily','retry') ORDER BY run_id",
             (slot_date,),
@@ -298,6 +298,17 @@ def cmd_retry(args: argparse.Namespace) -> int:
 
     if not runs:
         line(f"no scheduled collection recorded for slot {slot_date}; not retrying")
+        return EXIT_OK
+
+    still_running = [r for r in runs if r["ended_at_utc"] is None]
+    if still_running:
+        # A slow daily run can still be going when a retry window opens. Say so
+        # and stop, rather than colliding with the collector lock and looking
+        # like a failure.
+        line(
+            f"run {still_running[-1]['run_id']} for slot {slot_date} is still in "
+            "progress; nothing to retry"
+        )
         return EXIT_OK
     if any(str(r["outcome"]) == "success" for r in runs):
         line(f"slot {slot_date} already completed successfully; nothing to do")

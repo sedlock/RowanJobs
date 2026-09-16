@@ -42,9 +42,7 @@ def test_comment_containing_a_closing_tag_does_not_end_the_slice() -> None:
 
 
 def test_script_body_containing_a_closing_tag_does_not_end_the_slice() -> None:
-    markup = (
-        '<div id="job-details">a<script>var s = "</div>";</script>b</div><div>after</div>'
-    )
+    markup = '<div id="job-details">a<script>var s = "</div>";</script>b</div><div>after</div>'
     found = slice_by_id(markup)
     assert found is not None
     assert found.exact is True

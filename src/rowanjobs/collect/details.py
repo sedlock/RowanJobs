@@ -365,15 +365,25 @@ class DetailCollector:
     def _collect_resources(
         self, version_id: int, observation_id: int, extraction: Any
     ) -> list[dict[str, Any]]:
+        """Retrieve the in-scope documents this extraction identified.
+
+        The decision comes from the *current* extraction, not from the
+        ``resource_links`` rows written when the version was first seen. Those
+        rows record what the adapter decided at the time and stay as they are;
+        if the collection scope is widened later, a re-observation of unchanged
+        content still picks up the newly in-scope document.
+        """
         out: list[dict[str, Any]] = []
-        links = self.repo.db.query(
-            "SELECT resource_link_id, url_resolved, classification FROM resource_links "
-            "WHERE posting_version_id = ? AND collection_decision = 'fetch'",
-            (version_id,),
-        )
-        for link in links:
+        for link in extraction.links:
+            if link["collection_decision"] != "fetch":
+                continue
             url = str(link["url_resolved"])
-            link_id = int(link["resource_link_id"])
+            row = self.repo.db.one(
+                "SELECT resource_link_id FROM resource_links WHERE posting_version_id = ? "
+                "AND url_raw = ? ORDER BY resource_link_id LIMIT 1",
+                (version_id, link["url_raw"]),
+            )
+            link_id = int(row["resource_link_id"]) if row else None
             cached = self._resource_cache.get(url)
             if cached is not None:
                 self.repo.associate_resource(cached, observation_id, link_id)

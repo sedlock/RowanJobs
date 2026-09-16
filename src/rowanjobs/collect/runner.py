@@ -85,7 +85,9 @@ class Collector:
             max_consecutive_challenges=net.max_consecutive_challenges,
             jitter=net.jitter_seconds,
         )
-        policy = UrlPolicy(allowed_hosts=tuple(net.allowed_hosts))
+        policy = UrlPolicy(
+            allowed_hosts=tuple(net.allowed_hosts), allow_subdomains=net.allow_subdomains
+        )
         solver = None
         if self.cfg.browser.enabled:
             solver = ChallengeSolver(
@@ -284,7 +286,7 @@ class Collector:
         # being refused. Purely optional: without it the run still works, it just
         # backs off when challenged.
         priming = client.prime(self.cfg.listing_url)
-        if not priming.get("primed"):
+        if not priming.get("primed") and priming.get("required", True):
             errors.append(
                 {
                     "kind": "access_priming_unavailable",

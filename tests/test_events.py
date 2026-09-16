@@ -18,6 +18,7 @@ from rowanjobs.collect.repo import Repository
 from rowanjobs.collect.scanner import ListingScanner
 from rowanjobs.config import Config
 from rowanjobs.db import Database
+from rowanjobs.timeutil import slot_for
 
 from .conftest import (
     LISTING_URL,
@@ -178,7 +179,7 @@ def test_events_carry_the_comparability_group_so_scopes_are_never_compared_silen
     groups = [r["comparability_group"] for r in absences(db, "1002")]
     assert groups == ["v1-unfiltered-en-us", "v2-glassboro-only"]
     # An absence history is only comparable inside one group.
-    assert len({g for g in groups}) == 2
+    assert len(set(groups)) == 2
     listed = db.query(
         "SELECT DISTINCT comparability_group FROM presence_events WHERE event_kind = 'listed'"
     )
@@ -302,3 +303,14 @@ def test_the_run_summary_counts_match_the_rows_written(
         )
     )
     assert result.counts["events"][summary_key] == written
+
+
+def test_a_retry_keeps_the_slot_of_the_daily_run_it_is_retrying() -> None:
+    """The slot, not the wall clock, is the daily-confirmation key."""
+    daily = slot_for("2026-09-16T10:15:00Z", 6, 15)
+    retry = slot_for("2026-09-16T13:00:00Z", 6, 15)
+    assert daily == retry
+    assert daily[1] == "2026-09-16"
+    next_day = slot_for("2026-09-17T10:15:00Z", 6, 15)
+    assert next_day[1] == "2026-09-17"
+    assert next_day != daily

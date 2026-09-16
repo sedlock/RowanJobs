@@ -37,6 +37,8 @@ class ChallengeSolver:
     last_solved_at: float = field(default=0.0, repr=False)
     _cookies: dict[str, str] = field(default_factory=dict, repr=False)
     last_error: str | None = None
+    # False when the last page load succeeded but the source issued no token.
+    last_visit_issued_token: bool | None = None
 
     def available(self) -> bool:
         if not self.enabled:
@@ -90,14 +92,19 @@ class ChallengeSolver:
                     browser.close()
         except Exception as exc:  # noqa: BLE001 - surfaced as last_error
             self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_visit_issued_token = None
             return None
 
         if not cookies:
-            self.last_error = "browser visit produced no access token"
+            # The page loaded normally and the source chose not to challenge, so
+            # no token exists to collect. That is a benign outcome, not an error.
+            self.last_error = None
+            self.last_visit_issued_token = False
             return None
         self._cookies = cookies
         self.last_solved_at = time.monotonic()
         self.last_error = None
+        self.last_visit_issued_token = True
         return dict(cookies)
 
     def describe(self) -> dict[str, object]:
@@ -105,5 +112,6 @@ class ChallengeSolver:
             "enabled": self.enabled,
             "available": self.available(),
             "solves": self.solves,
+            "last_visit_issued_token": self.last_visit_issued_token,
             "last_error": self.last_error,
         }

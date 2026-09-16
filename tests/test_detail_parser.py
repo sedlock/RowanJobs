@@ -144,9 +144,7 @@ def test_label_followed_immediately_by_a_break_is_recorded_as_absent() -> None:
 
 
 def test_unknown_source_label_is_preserved_verbatim_and_flagged() -> None:
-    extraction = parse(
-        build_detail_page(extra_fields=(("Some New Label:", "a brand new value"),))
-    )
+    extraction = parse(build_detail_page(extra_fields=(("Some New Label:", "a brand new value"),)))
     unknown = value(extraction, "some_new_label")
     assert unknown.known_label is False
     assert unknown.source_label == "Some New Label:"
@@ -244,9 +242,7 @@ def test_message_list_closure_template_is_captured_as_the_closure_signal() -> No
 
 
 def test_closure_phrase_in_the_body_is_recognised_without_a_message_list() -> None:
-    extraction = parse(
-        build_detail_page(body_html="<p>This job is no longer advertised.</p>")
-    )
+    extraction = parse(build_detail_page(body_html="<p>This job is no longer advertised.</p>"))
     assert extraction.closure_signal == "closure phrase: 'this job is no longer'"
 
 
@@ -255,9 +251,7 @@ def test_closure_phrase_in_the_body_is_recognised_without_a_message_list() -> No
 
 def test_links_are_classified_with_an_explicit_collection_decision(captured: str) -> None:
     extraction = parse(captured)
-    decisions = {
-        (link["classification"], link["collection_decision"]) for link in extraction.links
-    }
+    decisions = {(link["classification"], link["collection_decision"]) for link in extraction.links}
     assert ("apply_workflow", "exclude") in decisions
     assert ("internal_nav", "exclude") in decisions
     for link in extraction.links:
@@ -265,11 +259,18 @@ def test_links_are_classified_with_an_explicit_collection_decision(captured: str
             assert link["exclusion_reason"]
 
 
-def test_job_documents_on_the_career_site_are_the_only_links_fetched() -> None:
+def test_job_documents_on_rowans_own_domain_are_the_only_links_fetched() -> None:
+    """Rowan hosts advertisement attachments across its own subdomains.
+
+    A document linked from inside an advertisement is a job-specific
+    attachment wherever on rowan.edu it lives; a third-party file is not
+    retrieved, but the link and the reason are still preserved.
+    """
     extraction = parse(
         build_detail_page(
             body_html=(
                 '<p><a href="/documents/jd.pdf">Description</a>'
+                ' <a href="https://engineering.rowan.edu/_docs/flow.pdf">Curriculum</a>'
                 ' <a href="https://example.org/other.pdf">Elsewhere</a>'
                 ' <a href="mailto:hr@rowan.edu">Mail</a></p>'
             )
@@ -277,14 +278,15 @@ def test_job_documents_on_the_career_site_are_the_only_links_fetched() -> None:
     )
     fetched = [link for link in extraction.links if link["collection_decision"] == "fetch"]
     assert {link["url_resolved"] for link in fetched} == {
-        "https://jobs.rowan.edu/documents/jd.pdf"
+        "https://jobs.rowan.edu/documents/jd.pdf",
+        "https://engineering.rowan.edu/_docs/flow.pdf",
     }
     offsite = next(
         link for link in extraction.links if link["url_resolved"].startswith("https://example.org")
     )
     assert offsite["classification"] == "job_document"
     assert offsite["collection_decision"] == "exclude"
-    assert "outside the v1 fetch scope" in offsite["exclusion_reason"]
+    assert "outside Rowan's own domain" in offsite["exclusion_reason"]
 
 
 @pytest.mark.parametrize(
@@ -296,6 +298,8 @@ def test_job_documents_on_the_career_site_are_the_only_links_fetched() -> None:
         ("https://jobs.rowan.edu/en-us/listing/", "internal_nav", "exclude"),
         ("https://jobs.rowan.edu/documents/jd.docx", "job_document", "fetch"),
         ("https://www.rowan.edu/hr/", "external", "exclude"),
+        ("https://engineering.rowan.edu/_docs/flow.pdf", "job_document", "fetch"),
+        ("https://www.cnjscl.org/salary.pdf", "job_document", "exclude"),
     ],
 )
 def test_link_classification_rules(url: str, classification: str, decision: str) -> None:
@@ -307,8 +311,6 @@ def test_link_classification_rules(url: str, classification: str, decision: str)
 
 def test_application_workflow_links_are_never_followed(captured: str) -> None:
     extraction = parse(captured)
-    apply_links = [
-        link for link in extraction.links if link["classification"] == "apply_workflow"
-    ]
+    apply_links = [link for link in extraction.links if link["classification"] == "apply_workflow"]
     assert apply_links
     assert all(link["collection_decision"] == "exclude" for link in apply_links)

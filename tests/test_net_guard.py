@@ -44,10 +44,15 @@ def test_check_refuses_addresses_outside_the_collection_allowlist(
 
 @pytest.mark.parametrize(
     "url",
-    ["file:///etc/passwd", "ftp://jobs.rowan.edu/x", "gopher://jobs.rowan.edu/", "//jobs.rowan.edu/x"],
+    [
+        "file:///etc/passwd",
+        "ftp://jobs.rowan.edu/x",
+        "gopher://jobs.rowan.edu/",
+        "//jobs.rowan.edu/x",
+    ],
 )
 def test_check_refuses_schemes_other_than_http_and_https(policy: UrlPolicy, url: str) -> None:
-    with pytest.raises(DestinationError, match="scheme|no host"):
+    with pytest.raises(DestinationError, match=r"scheme|no host"):
         policy.check(url)
 
 

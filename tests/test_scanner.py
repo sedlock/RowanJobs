@@ -27,8 +27,8 @@ from .conftest import (
     challenge_response,
     error_response,
     listing_job,
-    redirect_response,
     read_fixture,
+    redirect_response,
 )
 
 PAGE2_URL = f"{LISTING_URL}?page=2&page-items=20"
@@ -70,9 +70,7 @@ def test_first_page_url_is_the_configured_listing_url_unchanged() -> None:
 # ----------------------------------------------------------------- traversal
 
 
-def test_traversal_follows_every_more_link_and_stops_when_it_disappears(
-    scan, cfg: Config
-) -> None:
+def test_traversal_follows_every_more_link_and_stops_when_it_disappears(scan, cfg: Config) -> None:
     source = FakeSource()
     source.page(
         LISTING_URL,
@@ -166,9 +164,10 @@ def test_a_repeated_page_signature_is_a_pagination_loop(scan, db: Database) -> N
     assert result.qualified is False
     assert checks(result)["no_pagination_loop"] is False
     # The evidence from both pages is still stored.
-    assert int(
-        db.scalar("SELECT COUNT(*) FROM listing_pages WHERE scan_id = ?", (result.scan_id,))
-    ) == 2
+    assert (
+        int(db.scalar("SELECT COUNT(*) FROM listing_pages WHERE scan_id = ?", (result.scan_id,)))
+        == 2
+    )
 
 
 def test_a_failure_part_way_through_pagination_unqualifies_the_scan(scan, db: Database) -> None:
@@ -248,9 +247,7 @@ def test_access_control_response_unqualifies_the_scan_and_is_recorded_as_such(
     assert all(int(s["http_status"]) == 202 for s in signals)
 
 
-def test_unresolved_job_identifier_is_counted_and_unqualifies_the_scan(
-    scan, db: Database
-) -> None:
+def test_unresolved_job_identifier_is_counted_and_unqualifies_the_scan(scan, db: Database) -> None:
     source = FakeSource()
     source.page(
         LISTING_URL,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import stat
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -51,9 +52,7 @@ def test_a_snapshot_is_created_verified_and_recorded(
     manifest_path = result.path.with_suffix(".db.manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["sha256"] == sha256_file(result.path)
-    assert manifest["artifact_count"] == int(
-        populated.scalar("SELECT COUNT(*) FROM artifacts")
-    )
+    assert manifest["artifact_count"] == int(populated.scalar("SELECT COUNT(*) FROM artifacts"))
     assert manifest["posting_count"] == 1
     assert manifest["verification"]["state"] == "OK"
     assert manifest["offhost"]["state"] == "UNCONFIGURED"
@@ -66,9 +65,7 @@ def test_a_snapshot_is_created_verified_and_recorded(
     assert list(cfg.layout.backups_dir.glob("*.partial")) == []
 
 
-def test_the_snapshot_is_a_self_contained_queryable_copy(
-    cfg: Config, populated: Database
-) -> None:
+def test_the_snapshot_is_a_self_contained_queryable_copy(cfg: Config, populated: Database) -> None:
     result = BackupManager(cfg).create(populated)
     assert result.path is not None
 
@@ -150,7 +147,9 @@ def test_backups_can_be_switched_off_without_pretending_to_have_run(
     assert "disabled" in result.detail
 
 
-def test_restore_check_proves_the_archive_survived(cfg: Config, populated: Database, tmp_path: Path) -> None:
+def test_restore_check_proves_the_archive_survived(
+    cfg: Config, populated: Database, tmp_path: Path
+) -> None:
     manager = BackupManager(cfg)
     created = manager.create(populated)
     assert created.path is not None
@@ -225,9 +224,7 @@ def test_restore_to_produces_a_working_archive(
         handle.close()
 
 
-def test_pruning_never_removes_the_only_verified_snapshot(
-    cfg: Config, populated: Database
-) -> None:
+def test_pruning_never_removes_the_only_verified_snapshot(cfg: Config, populated: Database) -> None:
     manager = BackupManager(cfg)
     created = manager.create(populated)
     assert manager.prune(populated) == []
@@ -278,3 +275,34 @@ def test_offhost_push_uses_the_configured_command_and_reports_its_failure(
 def test_restore_check_is_due_when_it_has_never_run(cfg: Config) -> None:
     cfg.layout.ensure()
     assert BackupManager(cfg).restore_check_due() is True
+
+
+def test_pruning_rotates_older_snapshots_once_a_newer_verified_one_exists(
+    cfg: Config, populated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg.backup.keep_daily = 1
+    cfg.backup.keep_weekly = 1
+    cfg.backup.keep_monthly = 1
+    manager = BackupManager(cfg)
+    created = []
+    for month in (7, 8, 9):
+        stamp = datetime(2026, month, 1, 6, 15, 0, tzinfo=UTC)
+        monkeypatch.setattr("rowanjobs.ops.backup.now_utc", lambda stamp=stamp: stamp)
+        result = manager.create(populated, kind="daily")
+        assert result.state == "VERIFIED"
+        created.append(result.path)
+
+    newest = created[-1]
+    assert newest is not None
+    assert newest.exists()
+    for older in created[:-1]:
+        assert older is not None
+        assert not older.exists()
+        assert not older.with_suffix(".db.manifest.json").exists()
+    rows = {
+        Path(str(r["path"])).name: r["pruned_at_utc"]
+        for r in populated.query("SELECT path, pruned_at_utc FROM backups")
+    }
+    assert rows[newest.name] is None
+    assert all(rows[p.name] is not None for p in created[:-1] if p)
+    assert manager.latest(populated)["path"] == str(newest)
