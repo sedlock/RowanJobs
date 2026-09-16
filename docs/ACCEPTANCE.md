@@ -45,6 +45,8 @@ A requirement is never marked `VERIFIED` on the strength of a code reading.
 | 1.9 | Content changes are detected and recorded as intervals | TBD | TBD |
 | 1.10 | Absence requires a qualified scan and two distinct daily slots | TBD | TBD |
 | 1.11 | Access-control challenge is recorded as uncertainty, never absence | TBD | TBD |
+| 1.11a | Access priming obtains a token before the first request, and its absence is recorded rather than hidden | TBD | TBD |
+| 1.11b | Every superseded attempt is archived as its own `fetches` row | TBD | TBD |
 | 1.12 | Lock contention is recorded as `lock_contention`, nothing attempted | TBD | TBD |
 | 1.13 | An interrupted run recovers without manual repair | TBD | TBD |
 | 1.14 | WAL enabled on a verified-safe SQLite runtime | TBD | TBD |
@@ -183,7 +185,7 @@ resolved.
 | 8.4 | No off-host backup destination exists on this host | `BLOCKED_EXTERNAL` |
 | 8.5 | No unattended alert destination is established for this project | `BLOCKED_EXTERNAL` |
 | 8.6 | Host-down detection needs an external observer | `BLOCKED_EXTERNAL` by design |
-| 8.7 | The WAF threshold is a single observation, not a published policy | Open |
+| 8.7 | The WAF threshold (about seven token-less requests; 12 requests at 2.5 s with a token) is a small number of observations, not a published policy | Open |
 | 8.8 | *(add further deviations here as they are found)* | |
 
 ## 9. Sign-off

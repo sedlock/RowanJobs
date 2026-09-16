@@ -678,13 +678,23 @@ def cmd_diff(args: argparse.Namespace) -> int:
     cfg = _config_from(args)
     db = _open_ro(cfg)
     try:
+        # Only versions sharing one comparison contract may be compared, and the
+        # contract in force is the one behind the most recently seen version --
+        # not the lexically largest string, which would order 10.0.0 before 9.0.0.
         versions = db.query(
-            "SELECT v.* FROM posting_versions v JOIN postings p ON p.posting_id = v.posting_id "
-            "WHERE p.external_job_id = ? AND v.contract_version = "
-            "(SELECT MAX(contract_version) FROM posting_versions v2 "
-            " WHERE v2.posting_id = v.posting_id) "
-            "ORDER BY v.first_seen_at_utc",
-            (str(args.job_id),),
+            """
+            SELECT v.* FROM posting_versions v
+              JOIN postings p ON p.posting_id = v.posting_id
+             WHERE p.external_job_id = ?
+               AND v.contract_version = (
+                   SELECT v2.contract_version FROM posting_versions v2
+                     JOIN postings p2 ON p2.posting_id = v2.posting_id
+                    WHERE p2.external_job_id = ?
+                    ORDER BY v2.first_seen_at_utc DESC, v2.posting_version_id DESC
+                    LIMIT 1)
+             ORDER BY v.first_seen_at_utc, v.posting_version_id
+            """,
+            (str(args.job_id), str(args.job_id)),
         )
     finally:
         db.close()
@@ -980,6 +990,25 @@ def cmd_export(args: argparse.Namespace) -> int:
             count = writer(db, args.dataset, sys.stdout, job_id=args.job_id, limit=args.limit)
     finally:
         db.close()
+    return EXIT_OK
+
+
+# --------------------------------------------------------------- diagnostics
+
+
+def cmd_diagnostics(args: argparse.Namespace) -> int:
+    from .ops.diagnostics import write_diagnostics
+
+    cfg = _config_from(args)
+    db = _open_ro(cfg)
+    try:
+        path = write_diagnostics(cfg, db, Path(args.output) if args.output else None)
+    finally:
+        db.close()
+    if args.json:
+        emit({"written": str(path)}, True)
+    else:
+        line(f"sanitised diagnostics written to {path}")
     return EXIT_OK
 
 

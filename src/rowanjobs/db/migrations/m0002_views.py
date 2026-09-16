@@ -92,21 +92,26 @@ LEFT JOIN v_last_listed ll ON ll.posting_id = p.posting_id
 LEFT JOIN v_last_seen_any_scan ls ON ls.posting_id = p.posting_id
 LEFT JOIN v_last_captured lc ON lc.posting_id = p.posting_id
 LEFT JOIN v_last_observation lo ON lo.posting_id = p.posting_id
+-- observed_at_utc is second-precision and several observations per posting per
+-- day are legitimate, so the tie is broken on observation_id to keep exactly one
+-- row per posting.
 LEFT JOIN (
     SELECT o.posting_id, o.posting_version_id, o.observed_at_utc, v.title,
            v.content_fingerprint
     FROM posting_observations o
     JOIN posting_versions v ON v.posting_version_id = o.posting_version_id
-    WHERE o.observed_at_utc = (
-        SELECT MAX(o2.observed_at_utc) FROM posting_observations o2
-        WHERE o2.posting_id = o.posting_id AND o2.posting_version_id IS NOT NULL)
+    WHERE o.observation_id = (
+        SELECT o2.observation_id FROM posting_observations o2
+        WHERE o2.posting_id = o.posting_id AND o2.posting_version_id IS NOT NULL
+        ORDER BY o2.observed_at_utc DESC, o2.observation_id DESC LIMIT 1)
 ) latest ON latest.posting_id = p.posting_id
 LEFT JOIN (
     SELECT o.posting_id, o.availability_state, o.identity_state, o.observed_at_utc
     FROM posting_observations o
-    WHERE o.observed_at_utc = (
-        SELECT MAX(o2.observed_at_utc) FROM posting_observations o2
-        WHERE o2.posting_id = o.posting_id)
+    WHERE o.observation_id = (
+        SELECT o2.observation_id FROM posting_observations o2
+        WHERE o2.posting_id = o.posting_id
+        ORDER BY o2.observed_at_utc DESC, o2.observation_id DESC LIMIT 1)
 ) latest_any ON latest_any.posting_id = p.posting_id;
 
 -- Full observation history, joined to the content version it referenced.

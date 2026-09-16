@@ -66,7 +66,7 @@ reinterpreting an old scan.
 | `all_pages_retrieved` | `pages_failed == 0` | A page we never got might have held the advertisement |
 | `legitimate_termination` | `termination_reason` is `no_more_link` or `empty_validated_page` | Pagination ended because *the source said so*, not because a bound or a failure stopped us |
 | `no_unresolved_identity` | `unresolved_candidates == 0` | A row we could not resolve to an identifier might *be* the advertisement |
-| `no_access_control_response` | No page was answered with a challenge, block or rate-limit response | A challenged page is an unknown, not an empty one |
+| `no_access_control_response` | No page **ended** in a challenge, block or rate-limit response | A challenged page is an unknown, not an empty one. A page that was challenged and then retrieved completely after backing off has full coverage and does **not** fail this check; it is listed separately as `pages_challenged_then_recovered` so that "the source pushed back" is never invisible |
 | `no_unexpected_redirect` | No listing page redirected somewhere unexpected | We may not have been reading the listing at all |
 | `all_pages_http_200` | Every listing page answered 200 | Same reason |
 | `within_page_bound` | `pages_requested < max_listing_pages` | Hitting the safety ceiling means the traversal was cut short by *us* |

@@ -137,6 +137,12 @@ Content-addressed payload storage (`src/rowanjobs/archive/store.py`).
 ## `fetches`
 
 One row per retrieval **attempt**, including the ones that produced nothing.
+A single logical retrieval can therefore produce several rows: a challenge that
+was later worked around, or a timeout a retry recovered from, is inserted as its
+own row (oldest first) before the attempt that succeeded, distinguished by
+`attempt_no` (`src/rowanjobs/collect/repo.py::record_fetch`,
+`FetchResult.superseded_attempts`). The archive never claims a clean single
+request where the source actually pushed back.
 
 | Column | Meaning / permitted values |
 |---|---|
@@ -259,7 +265,7 @@ scan.**
 | `assessed_at_utc` | When the verdict was formed |
 | `qualified` | 0/1 (`CHECK`) |
 | `reason` | Which checks failed, when not qualified |
-| `checks_json` | Every individual check with `name`, `passed` (true/false/null for not-applicable), `detail` and `evidence` |
+| `checks_json` | Every individual check with `name`, `passed` (true/false/null for not-applicable), `detail` and `evidence`. For `no_access_control_response` the evidence separates `pages_unrecovered` (which fail the check) from `pages_challenged_then_recovered` (which do not, because coverage is intact) |
 
 Unique on `(scan_id, rules_version)` — a rules change adds a second verdict
 beside the first rather than overwriting it.

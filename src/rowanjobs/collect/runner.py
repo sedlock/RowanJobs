@@ -1,5 +1,6 @@
 """The daily collection workflow.
 
+    0. obtain an access token the way an ordinary visitor's browser does
     1. complete discovery traversal, queueing detail retrievals
     2. newly discovered advertisements first
     3. detail pages and their job-specific resources

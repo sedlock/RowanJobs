@@ -355,6 +355,23 @@ challenge at 21:43:01Z.
   `ChallengeWall` after `max_consecutive_challenges` (default 4) — the run stops
   requesting rather than hammering the source.
 
+### The token changes the picture
+
+A follow-up measurement against the live source established the difference an
+access token makes:
+
+| Client | Result |
+|---|---|
+| Token-less HTTP client | Challenged from about the **seventh** request |
+| Client holding a browser-issued `aws-waf-token` | **12 requests at 2.5 s intervals with no challenge at all** |
+
+This is why the collector now primes once up front (workflow step 0,
+`SourceClient.prime`): obtaining the token the way an ordinary visitor's browser
+does on its first page load is both **gentler on the source** — no requests spent
+being refused — and a more faithful reproduction of the public access path than
+repeatedly triggering the challenge. Collection still works without it, by
+backing off.
+
 The audit's observed threshold (about seven requests in about ninety seconds) is
 why `network.min_interval_seconds` defaults to 1.5 s with up to 0.75 s of
 jitter, and why `network.concurrency` is 1.
@@ -373,8 +390,12 @@ runs the AWS WAF challenge script, receives an `aws-waf-token` cookie and
 continues. `src/rowanjobs/net/browser.py` reproduces exactly that path with an
 unmodified headless Chromium, using the **same** user agent as the HTTP client,
 and hands the resulting `aws-waf*` cookie back. It does not spoof fingerprints,
-rotate proxies, install stealth patches or solve CAPTCHAs, and it is only
-reached after the collector has already slowed down and backed off.
+rotate proxies, install stealth patches or solve CAPTCHAs.
+
+It is used in two places: once up front to prime the client
+(`SourceClient.prime`), and again — with `force=True`, because the token we hold
+has just been rejected — if a challenge occurs mid-run, after the collector has
+already slowed down and backed off.
 
 Collection stays correct with the browser step disabled or absent: a challenge
 is then simply recorded as `access_control_challenge`, an explicit coverage

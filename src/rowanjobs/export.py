@@ -157,6 +157,22 @@ _QUERIES: dict[str, str] = {
 }
 
 
+# How each dataset is narrowed to one advertisement. Written per dataset rather
+# than spliced into the SQL: for `observations` the job id lives on a LEFT JOIN,
+# so a naive `WHERE external_job_id = ?` would silently drop observations whose
+# identity is not yet registered -- exactly the case worth inspecting.
+_JOB_FILTERS: dict[str, str] = {
+    "postings": "p.external_job_id = ?",
+    "current": "c.external_job_id = ?",
+    "history": "h.external_job_id = ?",
+    "versions": "p.external_job_id = ?",
+    "observations": "(p.external_job_id = ? OR o.expected_external_job_id = ?)",
+    "links": "p.external_job_id = ?",
+}
+
+_JOB_FILTER_PARAMS: dict[str, int] = {"observations": 2}
+
+
 def rows_for(
     db: Database, dataset: str, *, job_id: str | None = None, limit: int | None = None
 ) -> list[dict[str, Any]]:
@@ -165,13 +181,14 @@ def rows_for(
     sql = _QUERIES[dataset].strip()
     params: list[Any] = []
     if job_id:
-        column = "external_job_id"
-        if f"{column}" not in sql:  # pragma: no cover - all datasets expose it
+        predicate = _JOB_FILTERS.get(dataset)
+        if predicate is None:
             raise ValueError(f"dataset {dataset!r} cannot be filtered by job id")
-        head, _, tail = sql.partition(" ORDER BY ")
-        connector = " AND " if " WHERE " in head.upper() else " WHERE "
-        sql = f"{head}{connector}{column} = ? ORDER BY {tail}"
-        params.append(str(job_id))
+        head, sep, tail = sql.partition(" ORDER BY ")
+        if not sep:  # pragma: no cover - every dataset orders its rows
+            raise ValueError(f"dataset {dataset!r} has no ORDER BY to split on")
+        sql = f"{head} WHERE {predicate} ORDER BY {tail}"
+        params.extend([str(job_id)] * _JOB_FILTER_PARAMS.get(dataset, 1))
     if limit:
         sql += f" LIMIT {int(limit)}"
     return db.query(sql, tuple(params))

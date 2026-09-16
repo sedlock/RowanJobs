@@ -109,8 +109,10 @@ src/rowanjobs/
     collect/            runner (the workflow), scanner, details, qualify, events,
                         repo (persistence), lock
     ops/                backup, health, doctor, schedule, notify, atomic writes
-tests/fixtures/pageup/  trimmed real captures used by the test suite
-ops/systemd/            unit templates (__VENV__/__CONFIG__/__DATA_ROOT__)
+tests/                  conftest.py, test_*.py, and fixtures/pageup/
+                        (trimmed real captures the tests parse)
+ops/systemd/            unit templates (__VENV__/__CONFIG__/__DATA_ROOT__),
+                        substituted by ops/install.sh
 .github/workflows/ci.yml  fixture-only CI
 docs/                   the documents listed in README.md
 ```
@@ -126,7 +128,10 @@ uv run pytest -q
 ```
 
 Tests must run entirely from `tests/fixtures/pageup/` and must never open a
-socket to the live source. `pytest.ini_options` sets `testpaths = ["tests"]`,
+socket to the live source. `SourceClient` accepts an injected
+`httpx.BaseTransport` and `RequestBudget` accepts an injected `sleeper`, so
+network behaviour and pacing are testable without any real traffic or real
+waiting. `pytest.ini_options` sets `testpaths = ["tests"]`,
 `--strict-markers`, and turns RowanJobs `DeprecationWarning`s into errors.
 
 ## Running the collector safely

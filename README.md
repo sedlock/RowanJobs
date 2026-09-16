@@ -111,10 +111,12 @@ Paths are defined in `src/rowanjobs/paths.py` and can be overridden with
 One collection per day at **06:15 America/New_York**, with up to two bounded
 retry windows (09:15 and 13:15 local) that only act if the day's slot is still
 unresolved. Units are in `ops/systemd/` (`rowanjobs.service`, `rowanjobs.timer`,
-`rowanjobs-retry.service`, `rowanjobs-retry.timer`); they are templates with
-`__VENV__`, `__CONFIG__` and `__DATA_ROOT__` placeholders to substitute at
-install time. A missed day stays a coverage gap — a later run cannot reconstruct
-it. See `docs/OPERATIONS.md`.
+`rowanjobs-retry.service`, `rowanjobs-retry.timer`) as templates carrying
+`__VENV__`, `__CONFIG__` and `__DATA_ROOT__` placeholders. `ops/install.sh`
+substitutes them with absolute resolved paths, installs the units, enables the
+timers and records a deployment manifest; it is idempotent and safe to re-run.
+A missed day stays a coverage gap — a later run cannot reconstruct it. See
+`docs/OPERATIONS.md`.
 
 ## Documentation
 

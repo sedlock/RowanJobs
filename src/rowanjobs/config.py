@@ -67,7 +67,7 @@ class BrowserConfig:
     Used only to satisfy an AWS WAF *challenge* the way an ordinary public
     visitor's browser does, and only when plain HTTP has been challenged. No
     stealth plugins, no proxy rotation, no CAPTCHA solving. See
-    docs/SOURCE_ACCESS_POLICY.md.
+    docs/SECURITY.md.
     """
 
     enabled: bool = True

@@ -132,14 +132,16 @@ So blocks are trimmed and paragraph separation is at most one blank line.
 ### `<pre>` exemption
 
 Subtrees inside `<pre>` are **exempt from whitespace collapse** and keep their
-whitespace byte for byte (`_Renderer._pre_depth`; `_text()` returns the raw
-value when the depth is non-zero). Preformatted text is content, not layout.
+whitespace byte for byte. Preformatted text is content, not layout.
 
-Note the interaction with the post-processing rules above: the trailing/leading
-whitespace regexes are applied to the whole assembled string, so a `<pre>` block
-whose lines begin with spaces will have that indentation removed by
-`_LEADING_WS`. If byte-exact preformatted text matters for a future source,
-that is the rule to revisit — and it would require a text-contract bump.
+The exemption is complete, including against the post-processing rules above.
+Those regexes operate on the whole assembled document and would otherwise reach
+inside a `<pre>` and strip indentation that is content. So while `_pre_depth` is
+non-zero, `_Renderer._text` sets the run aside in `_preserved` and emits a
+`\x00<index>\x00` placeholder instead; `result()` runs the whitespace tidying
+over the placeholder-bearing text and only then substitutes the original runs
+back (`_PRESERVED`). Nothing inside a `<pre>` is ever collapsed, trimmed or
+newline-folded.
 
 ## 9. Element scope and tails
 

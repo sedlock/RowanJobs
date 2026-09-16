@@ -16,8 +16,20 @@ One collection per day at **06:15 America/New_York**.
 | `rowanjobs-retry.service` | — | `rowanjobs --json retry` |
 
 Templates live in `ops/systemd/` with `__VENV__`, `__CONFIG__` and
-`__DATA_ROOT__` placeholders to substitute at install time; they are installed as
-**user** units and require lingering to be enabled for the collecting user
+`__DATA_ROOT__` placeholders. `ops/install.sh` performs the substitution with
+absolute resolved paths (no `~`, no shell expansion, no activated virtualenv),
+syncs the locked environment, applies migrations, installs and enables the
+units, validates the calendar expression and records a deployment manifest. It
+is idempotent: an unchanged unit is left alone. `ops/uninstall.sh` removes the
+units and never touches the archive.
+
+```
+./ops/install.sh                     # deploy or converge
+./ops/install.sh --no-enable         # install without enabling the timers
+./ops/uninstall.sh                   # remove units, keep all collected evidence
+```
+
+The units are installed as **user** units and require lingering to be enabled for the collecting user
 (`loginctl enable-linger`), otherwise they will not run without an active login.
 `rowanjobs doctor` checks for this.
 
@@ -174,15 +186,27 @@ machine-readable state is `<data_root>/runtime/health.json` plus the
 carry `availability_state='access_control_challenge'`; the listing scan failed
 the `no_access_control_response` check and did not qualify.
 
+A challenge that the collector *recovered* from is less serious: the page was
+eventually retrieved completely, coverage is intact, and the scan still
+qualifies. It is still archived as its own `fetches` row and listed in the
+assessment's `pages_challenged_then_recovered`, so it remains visible
+(`src/rowanjobs/collect/qualify.py`, `src/rowanjobs/collect/scanner.py`).
+
 **What it is:** AWS WAF answering `HTTP 202` with `x-amzn-waf-action: challenge`
 and an empty body. Observed during the source audit after roughly seven requests
 in about ninety seconds; it cleared after about eleven minutes of quiet
 (`docs/SOURCE_ADAPTER_AUDIT.md`).
 
-**What the collector already did:** widened its inter-request interval by 1.6×
-per challenge, waited 45 s → 90 s → 180 s, optionally attempted the ordinary
-browser challenge path, and stopped requesting after
+**What the collector already did:** attempted to obtain an access token up
+front (workflow step 0, below), widened its inter-request interval by 1.6× per
+challenge, waited 45 s → 90 s → 180 s, re-solved the challenge through the
+ordinary browser path if one is available, and stopped requesting after
 `max_consecutive_challenges` rather than hammering the source.
+
+If `errors` contains `access_priming_unavailable`, no token could be obtained
+before the run started — usually because Playwright is not installed. Collection
+continues and backs off when challenged, but coverage may be reduced. The
+`coverage.access_priming` field records what happened.
 
 **What to do:**
 
@@ -242,7 +266,7 @@ Common causes and responses:
 
 | Failing check | Likely cause | Response |
 |---|---|---|
-| `no_access_control_response` | WAF challenge | See above |
+| `no_access_control_response` | WAF challenge the run never recovered from | See above; check `coverage.access_priming` too |
 | `all_pages_retrieved` / `all_pages_http_200` | Transient network or site trouble | Let the retry window handle it |
 | `legitimate_termination` = `max_pages` | The inventory grew past `max_listing_pages`, or pagination misbehaved | Raise the bound only after checking the source really has that many pages |
 | `structure_recognized` | **The source's markup changed** | Stop and investigate. Compare a fresh capture against `tests/fixtures/pageup/`, update the adapter, and bump `PARSER_VERSION` |

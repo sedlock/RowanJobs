@@ -16,6 +16,10 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=ROWANJOBS_CONFIG=__CONFIG__
 Environment=ROWANJOBS_DATA_ROOT=__DATA_ROOT__
 Environment=TZ=UTC
+# PrivateTmp gives this unit its own /tmp. An inherited TMPDIR pointing outside
+# it would be read-only under ProtectSystem=strict, which is enough to stop the
+# browser step from starting.
+Environment=TMPDIR=/tmp
 
 TimeoutStartSec=3h
 SuccessExitStatus=0 2 3

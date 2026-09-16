@@ -581,12 +581,14 @@ class BackupManager:
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            last = parse_utc(str(data["checked_at_utc"]))
+            checked_at = str(data["checked_at_utc"])
+            parse_utc(checked_at)  # reject a malformed timestamp outright
         except (OSError, ValueError, KeyError):
             return True
         from datetime import date as _date
 
+        # Compared on the operational calendar, which is how the cadence is
+        # described to operators.
         today = _date.fromisoformat(local_date_str())
-        last_local = _date.fromisoformat(local_date_str(str(data["checked_at_utc"])))
-        del last
+        last_local = _date.fromisoformat(local_date_str(checked_at))
         return (today - last_local).days >= self.cfg.backup.restore_check_interval_days

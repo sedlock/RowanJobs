@@ -65,7 +65,15 @@ Two structural ideas carry most of the weight:
 
 `src/rowanjobs/collect/runner.py::Collector._collect` implements six numbered
 steps; the module docstring states them, and the code carries the same numbers
-as section comments.
+as section comments. A short step 0 precedes them.
+
+0. **Access priming (optional).** `SourceClient.prime(listing_url)` obtains an
+   access token the way an ordinary visitor's browser does on its first page
+   load, rather than spending source requests being refused. It is entirely
+   optional: with no solver available it is a no-op, an
+   `access_priming_unavailable` entry is added to the run's errors, and the run
+   continues, backing off when challenged. The outcome is recorded in
+   `coverage.access_priming`.
 
 1. **Complete discovery traversal, queueing detail retrievals.**
    `ListingScanner.scan(scan_ordinal=1, scan_role="discovery")` walks the
@@ -181,7 +189,9 @@ Recorded in `EXECUTION_STATE.md`: the system Python's `sqlite3` on this host is
 3.45.1 (affected); `pysqlite3-binary` bundles 3.51.1 (affected); `apsw` 3.53.4.0
 bundles SQLite 3.53.4 with `SQLITE_SOURCE_ID 2026-07-24 19:02:57 bf7c7f30…8a88`,
 matching the official release hash — so WAL is enabled on this verified runtime.
-`pyproject.toml` pins `apsw>=3.53.4.0,<3.54` for exactly this reason.
+`pyproject.toml` pins `apsw>=3.53.4.0,<3.54` for exactly this reason; its
+comment points at `docs/SQLITE_RUNTIME.md`, which is this section — the evidence
+is not duplicated in a separate file.
 
 ### Write transactions
 
@@ -204,7 +214,14 @@ instead of starting over.
 `SourceClient.fetch` returns raw bytes and never decodes or interprets them
 (`net/client.py`). `Repository.record_fetch` stores the payload through
 `ArchiveStore.put_fetch` and writes the `fetches` row in the same short
-transaction, *before* any parser runs. Payloads are keyed by the SHA-256 of the
+transaction, *before* any parser runs.
+
+**Every attempt is archived, not just the successful one.** A `FetchResult`
+carries `superseded_attempts` — earlier attempts for the same URL in the same
+call, such as a challenge that was later worked around or a timeout a retry
+recovered from — and `record_fetch` inserts a `fetches` row for each of them,
+oldest first, before the final one. Losing them would make the archive claim a
+clean single request where the source actually pushed back. Payloads are keyed by the SHA-256 of the
 **uncompressed** bytes, so changing the compression method later cannot change
 content identity, and an unchanged page re-fetched tomorrow reuses today's
 artifact instead of storing a second copy.

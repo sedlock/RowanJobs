@@ -105,15 +105,28 @@ Explicitly, it does **not**:
 - install stealth patches or anti-detection plugins — plain Playwright Chromium;
 - solve CAPTCHAs, by service or otherwise.
 
-It is bounded (`max_solves_per_run`, default 6; token reused for
-`token_ttl_seconds`, default 30 minutes) and is only reached **after** the client
-has already recorded the challenge and backed off.
+It is used twice: once **before** the first request (`SourceClient.prime`), so
+that the run does not spend source requests being refused, and again if a
+challenge nevertheless occurs mid-run — with `force=True`, because the token
+being held has just been rejected, and only **after** the client has already
+recorded the challenge and backed off. Priming up front is the gentler of the two
+behaviours: measured against the live source, a token-less client is challenged
+from about the seventh request, while a client holding a browser-issued token
+served 12 requests at 2.5-second intervals without being challenged at all.
+
+It is bounded: `max_solves_per_run` (default 6), and the token is reused for
+`token_ttl_seconds` (default 30 minutes) unless it has just been rejected.
 
 **Collection remains correct with it disabled.** With `browser.enabled = false`,
-or with Playwright simply not installed, a challenge is recorded as
+or with Playwright simply not installed, priming is a no-op that records
+`access_priming_unavailable` in the run's errors, and a challenge is recorded as
 `access_control_challenge`: an explicit coverage exception that never becomes
 evidence of a missing advertisement. The browser step improves coverage; it is
 not load-bearing for correctness.
+
+Every challenged attempt is archived as its own `fetches` row even when a later
+attempt succeeded (`FetchResult.superseded_attempts`), so the fact that the
+source pushed back can never be invisible.
 
 ## 5. The SSRF guard
 

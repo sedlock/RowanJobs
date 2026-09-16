@@ -8,7 +8,7 @@ authors = [{ name = "Mark Sedlock" }]
 dependencies = [
     # Patched SQLite runtime. apsw 3.53.4.0 bundles SQLite 3.53.4, which contains
     # the WAL-reset corruption fix (SQLite 3.51.3 / 3.53.0 and later).
-    # See docs/SQLITE_RUNTIME.md for the recorded evidence.
+    # See docs/ARCHITECTURE.md for the recorded evidence.
     "apsw>=3.53.4.0,<3.54",
     "httpx[http2]>=0.28,<0.29",
     "lxml>=5.3,<7",
