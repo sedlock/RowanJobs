@@ -1,0 +1,104 @@
+# RowanJobs configuration.
+#
+# Every key below is optional: the collector runs correctly with this file
+# absent. Values shown are the defaults. Copy to ~/.config/rowanjobs/config.toml
+# and edit. See docs/CONFIGURATION.md.
+
+# Where the archive, backups, logs and runtime state live. Kept outside the Git
+# working tree on purpose.
+# data_root = "~/.local/share/rowanjobs"
+# db_path   = "~/.local/share/rowanjobs/rowanjobs.db"
+
+[network]
+# All live source traffic is serialised through one request budget.
+concurrency = 1
+# Minimum seconds between requests. The Rowan site sits behind AWS WAF; raising
+# this is the correct response to challenge responses. See docs/SECURITY.md.
+min_interval_seconds = 2.5
+connect_timeout_seconds = 10.0
+read_timeout_seconds = 30.0
+write_timeout_seconds = 10.0
+pool_timeout_seconds = 10.0
+max_retries = 3
+backoff_base_seconds = 2.0
+backoff_max_seconds = 120.0
+jitter_seconds = 0.75
+# How long to wait after an access-control challenge before trying again
+# (doubled per consecutive challenge).
+challenge_backoff_seconds = 60.0
+max_consecutive_challenges = 4
+# Hard ceiling on live requests per run.
+max_requests_per_run = 1200
+user_agent = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)"
+accept_language = "en-US,en;q=0.9"
+http2 = true
+max_response_bytes = 26214400
+max_resource_bytes = 52428800
+max_redirects = 5
+# Only these hosts may be contacted. Redirects to anything else are refused.
+allowed_hosts = ["jobs.rowan.edu", "careers-static.pageuppeople.com"]
+resource_hosts = ["jobs.rowan.edu"]
+
+[browser]
+# Used ONLY to satisfy an AWS WAF challenge the way an ordinary visitor's
+# browser does, and only after plain HTTP has already been challenged and backed
+# off. Not stealth, not proxy rotation, not CAPTCHA solving. Collection stays
+# correct with this disabled: a challenge is then recorded as an explicit
+# coverage exception.
+enabled = true
+headless = true
+nav_timeout_seconds = 45.0
+token_ttl_seconds = 1800.0
+max_solves_per_run = 6
+
+[collection]
+base_url = "https://jobs.rowan.edu"
+listing_path = "/en-us/listing/"
+locale = "en-us"
+page_items = 20
+# Safety bound. Reaching it makes the scan unqualified rather than silently
+# truncating the traversal.
+max_listing_pages = 200
+scope_label = "all-unfiltered"
+# Absence histories are only comparable within one group. Bump this when the
+# collected scope changes.
+comparability_group = "v1-unfiltered-en-us"
+verification_scan = true
+reconciliation_scan = true
+collect_resources = true
+# Historical URLs terminal this many times move from daily to weekly rechecks.
+terminal_observations_before_weekly = 3
+weekly_recheck_interval_days = 7
+max_historical_rechecks_per_run = 120
+
+[schedule]
+hour = 6
+minute = 15
+timezone = "America/New_York"
+max_retries_per_slot = 2
+
+[backup]
+enabled = true
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
+verify_after_backup = true
+restore_check_interval_days = 7
+# Off-host protection. Leave offhost_kind empty and RowanJobs reports protection
+# as UNCONFIGURED rather than pretending the archive is safe.
+#   offhost_kind      = "rclone" | "rsync-ssh" | "command"
+#   offhost_target    = "remote:bucket/path"  or  "user@host:/path"
+#   offhost_command   = ["/usr/bin/my-uploader", "{src}", "{dst}"]
+offhost_kind = ""
+offhost_target = ""
+offhost_namespace = "rowanjobs"
+offhost_command = []
+
+[notify]
+# RowanJobs will not borrow another application's credentials or invent a
+# recipient. With kind empty, nothing is sent and health reports UNCONFIGURED.
+#   kind    = "command"
+#   command = ["/usr/local/bin/alert", "--channel", "ops"]   # alert JSON on stdin
+kind = ""
+command = []
+notify_on = ["failed", "partial"]

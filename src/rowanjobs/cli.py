@@ -267,6 +267,58 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# --------------------------------------------------------------------- retry
+
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    """Bounded same-day retry for an incomplete collection.
+
+    A retry belongs to its parent's scheduled slot. It never creates an extra
+    daily baseline slot, and because presence events key on the slot local date
+    it can never count as an additional daily absence confirmation.
+    """
+    from .timeutil import slot_for
+
+    cfg = _config_from(args)
+    if not cfg.layout.db_path.exists():
+        line("no archive yet; nothing to retry")
+        return EXIT_OK
+    _slot_utc, slot_date = slot_for(None, cfg.schedule.hour, cfg.schedule.minute)
+
+    db = _open_ro(cfg)
+    try:
+        runs = db.query(
+            "SELECT run_id, run_kind, attempt_no, outcome, parent_run_id "
+            "FROM collection_runs WHERE scheduled_slot_local_date = ? "
+            "AND run_kind IN ('daily','retry') ORDER BY run_id",
+            (slot_date,),
+        )
+    finally:
+        db.close()
+
+    if not runs:
+        line(f"no scheduled collection recorded for slot {slot_date}; not retrying")
+        return EXIT_OK
+    if any(str(r["outcome"]) == "success" for r in runs):
+        line(f"slot {slot_date} already completed successfully; nothing to do")
+        return EXIT_OK
+
+    attempts = sum(1 for r in runs if str(r["run_kind"]) == "retry")
+    budget = cfg.schedule.max_retries_per_slot
+    if attempts >= budget:
+        line(
+            f"slot {slot_date} has used its {budget} retry attempt(s) and remains "
+            "unresolved; leaving it for the next scheduled collection"
+        )
+        return EXIT_DEGRADED
+
+    parent = next((int(r["run_id"]) for r in runs if str(r["run_kind"]) == "daily"), None)
+    args.kind = "retry"
+    args.parent_run = parent
+    args.attempt = attempts + 2
+    return cmd_collect(args)
+
+
 # -------------------------------------------------------------------- status
 
 
@@ -1016,6 +1068,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument("--no-backup", action="store_true")
     collect.set_defaults(func=cmd_collect)
+
+    retry = sub.add_parser(
+        "retry", help="bounded same-day retry of an incomplete scheduled collection"
+    )
+    retry.add_argument("--max-details", type=int)
+    retry.add_argument("--no-verification", action="store_true")
+    retry.add_argument("--no-backup", action="store_true")
+    retry.set_defaults(func=cmd_retry)
 
     status = sub.add_parser("status", help="operational state")
     status.add_argument("--no-timer", action="store_true", help="skip systemd inspection")

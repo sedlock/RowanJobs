@@ -187,9 +187,8 @@ class BackupManager:
             fk = list(conn.execute("PRAGMA foreign_key_check"))
             if fk:
                 return {"state": "FAILED", "detail": f"foreign_key_check found {len(fk)} rows"}
-            tables = int(
-                conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
-            )
+            row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()
+            tables = int(row[0]) if row else 0
             return {
                 "state": "OK",
                 "detail": f"integrity_check ok, foreign_key_check clean, {tables} tables",

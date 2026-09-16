@@ -94,6 +94,9 @@ class Collector:
                 nav_timeout_seconds=self.cfg.browser.nav_timeout_seconds,
                 token_ttl_seconds=self.cfg.browser.token_ttl_seconds,
                 max_solves=self.cfg.browser.max_solves_per_run,
+                # Same honest identity as the HTTP client: the browser step is a
+                # transport detail, not a different claim about who we are.
+                user_agent=net.user_agent,
             )
             if not solver.available():
                 solver = None

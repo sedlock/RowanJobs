@@ -1,0 +1,73 @@
+name: CI
+
+# Fixture-based only. RowanJobs never scrapes the live source from GitHub
+# Actions: production collection belongs to the scheduled systemd timer on
+# entropy, under one request budget. No schedule trigger is defined here on
+# purpose, and no production secrets are used.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint, type-check and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Belt and braces: even a stray live fetch would be refused.
+      ROWANJOBS_DATA_ROOT: ${{ runner.temp }}/rowanjobs-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Format check
+        run: uv run ruff format --check src tests
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Verify the SQLite runtime carries the WAL-reset fix
+        run: |
+          uv run python - <<'PY'
+          from rowanjobs.db.runtime import runtime_info
+          info = runtime_info()
+          print(info.wal_evidence)
+          assert info.wal_safe, f"unsafe SQLite build for WAL: {info.sqlite_version}"
+          PY
+
+      - name: Tests
+        run: uv run pytest -q --cov=rowanjobs --cov-report=term-missing
+
+      - name: Assert no production data or archive files are committed
+        run: |
+          set -e
+          if git ls-files | grep -E '\.(db|sqlite3?|db-wal|db-shm)$'; then
+            echo "database files must never be committed" >&2
+            exit 1
+          fi
+          if git ls-files | grep -E '^(archive|backups|logs|runtime|exports)/'; then
+            echo "runtime data directories must never be committed" >&2
+            exit 1
+          fi

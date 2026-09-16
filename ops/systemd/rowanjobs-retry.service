@@ -1,0 +1,43 @@
+[Unit]
+Description=RowanJobs bounded same-day retry for an incomplete collection
+Documentation=https://github.com/sedlock/RowanJobs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# `retry` is a no-op when the day's slot already succeeded or when its retry
+# budget is spent. It reuses the parent run's scheduled slot, so it never adds a
+# daily baseline slot and never counts as an extra daily absence confirmation.
+ExecStart=__VENV__/bin/rowanjobs --json retry
+WorkingDirectory=__DATA_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ROWANJOBS_CONFIG=__CONFIG__
+Environment=ROWANJOBS_DATA_ROOT=__DATA_ROOT__
+Environment=TZ=UTC
+
+TimeoutStartSec=3h
+SuccessExitStatus=0 2 3
+
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DATA_ROOT__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rowanjobs-retry

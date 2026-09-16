@@ -80,7 +80,8 @@ def runtime_info() -> RuntimeInfo:
     version = apsw.sqlite_lib_version()
     probe = apsw.Connection(":memory:")
     try:
-        source_id = str(probe.execute("select sqlite_source_id()").fetchone()[0])
+        row = probe.execute("select sqlite_source_id()").fetchone()
+        source_id = str(row[0]) if row else "unknown"
     finally:
         probe.close()
 

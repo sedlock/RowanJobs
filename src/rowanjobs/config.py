@@ -26,7 +26,10 @@ class NetworkConfig:
     """Source-traffic policy. One budget governs every live request."""
 
     concurrency: int = 1
-    min_interval_seconds: float = 1.5
+    # 2.5 s comes from the 2026-09-16 source audit: roughly seven application
+    # requests inside 90 seconds tripped the site's WAF challenge. A ~150-request
+    # harvest at this pace takes about six minutes and stayed under the threshold.
+    min_interval_seconds: float = 2.5
     connect_timeout_seconds: float = 10.0
     read_timeout_seconds: float = 30.0
     write_timeout_seconds: float = 10.0
@@ -37,7 +40,7 @@ class NetworkConfig:
     jitter_seconds: float = 0.75
     # After this many consecutive challenge/blocked responses the run stops
     # requesting rather than hammering the source.
-    challenge_backoff_seconds: float = 45.0
+    challenge_backoff_seconds: float = 60.0
     max_consecutive_challenges: int = 4
     # Hard ceiling on live requests per run. Protects the source and us.
     max_requests_per_run: int = 1200

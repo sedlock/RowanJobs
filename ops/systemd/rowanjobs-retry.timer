@@ -1,0 +1,16 @@
+[Unit]
+Description=RowanJobs retry window for an incomplete daily collection
+Documentation=https://github.com/sedlock/RowanJobs
+
+[Timer]
+Unit=rowanjobs-retry.service
+# Two retry windows after the 06:15 slot. The service itself enforces the
+# attempt budget, so these are opportunities, not guaranteed extra runs.
+OnCalendar=*-*-* 09:15:00 America/New_York
+OnCalendar=*-*-* 13:15:00 America/New_York
+Persistent=false
+AccuracySec=1min
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

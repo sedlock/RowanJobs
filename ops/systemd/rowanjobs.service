@@ -1,0 +1,49 @@
+[Unit]
+Description=RowanJobs: daily archive of public Rowan University job advertisements
+Documentation=https://github.com/sedlock/RowanJobs
+# Collection must not depend on ControlPanel, GitHub, Claude or any interactive
+# process. The only requirement is that the network is reachable.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Absolute, resolved paths. No "~", no shell expansion, no activated virtualenv:
+# the interpreter inside the locked project environment is invoked directly.
+ExecStart=__VENV__/bin/rowanjobs --json collect --kind daily
+WorkingDirectory=__DATA_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ROWANJOBS_CONFIG=__CONFIG__
+Environment=ROWANJOBS_DATA_ROOT=__DATA_ROOT__
+Environment=TZ=UTC
+
+# A full harvest paces itself to protect the source; give it room, but not forever.
+TimeoutStartSec=3h
+# Exit 2 (degraded) and 3 (protection degraded) mean useful evidence was still
+# collected. Only 1 (failed), 4 (lock contention) and 5 (usage) are real failures.
+SuccessExitStatus=0 2 3
+
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening. RowanJobs opens no listening port and needs no elevated capability.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DATA_ROOT__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rowanjobs

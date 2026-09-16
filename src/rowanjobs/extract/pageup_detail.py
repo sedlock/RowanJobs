@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
 from lxml import html
@@ -157,7 +157,7 @@ def _failed(detail: str) -> DetailExtraction:
 def parse_detail(markup: str, base_url: str) -> DetailExtraction:
     warnings: list[str] = []
     try:
-        doc = html.document_fromstring(markup)
+        doc = cast("html.HtmlElement", html.document_fromstring(markup))
     except Exception as exc:  # noqa: BLE001
         return _failed(f"HTML parse failed: {exc}")
 
@@ -261,7 +261,7 @@ def _labelled_values(
             # The date shown is the <time> element's text; anything after it
             # ("Eastern Daylight Time") is the source's timezone wording.
             date = parse_source_date(displayed or value_text, machine, tz_text)
-        elif state == "present":
+        elif state == "present" and value_text is not None:
             parts = [p for p in MULTIVALUE_SEPARATOR.split(value_text) if p.strip()]
             normalized = {
                 "values": parts,

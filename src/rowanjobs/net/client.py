@@ -268,8 +268,9 @@ class SourceClient:
                 result.failure_detail = f"challenge solver failed: {exc}"
                 cookies = None
             if cookies:
+                host = httpx.URL(result.requested_url).host
                 for name, value in cookies.items():
-                    self._client.cookies.set(name, value, domain=".rowan.edu")
+                    self._client.cookies.set(name, value, domain=host)
                 return True
         self.budget.backoff(wait)
         return True

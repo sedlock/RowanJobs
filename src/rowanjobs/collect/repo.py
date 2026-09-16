@@ -516,7 +516,7 @@ class Repository:
         posting_id: int,
         extraction: DetailExtraction,
         extraction_id: int,
-        run_id: int,
+        run_id: int | None,
         observed_at_utc: str,
     ) -> tuple[int, bool]:
         """Return ``(posting_version_id, created)`` for this extracted content.

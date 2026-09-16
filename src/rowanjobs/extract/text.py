@@ -111,6 +111,10 @@ _WS_RUN = re.compile(r"[ \t\r\n]+")
 _TRAILING_WS = re.compile(r"[ \t]+\n")
 _LEADING_WS = re.compile(r"\n[ \t]+")
 _MANY_NEWLINES = re.compile(r"\n{3,}")
+# Stand-in for a <pre> text run while the document-wide whitespace tidying
+# below runs. U+0000 cannot occur in parsed markup, so it can never collide
+# with page content.
+_PRESERVED = re.compile("\x00(\\d+)\x00")
 
 
 def _collapse(value: str) -> str:
@@ -118,11 +122,12 @@ def _collapse(value: str) -> str:
 
 
 class _Renderer:
-    __slots__ = ("_pre_depth", "out")
+    __slots__ = ("_pre_depth", "_preserved", "out")
 
     def __init__(self) -> None:
         self.out: list[str] = []
         self._pre_depth = 0
+        self._preserved: list[str] = []
 
     def emit(self, value: str) -> None:
         if value:

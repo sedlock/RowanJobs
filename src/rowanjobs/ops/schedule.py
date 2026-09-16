@@ -116,6 +116,7 @@ def timer_status(cfg: Config) -> dict[str, Any]:
         "lingering": lingering_enabled(),
         "units": {},
     }
+    timers = _list_timers()
     for unit in (TIMER_UNIT, RETRY_TIMER_UNIT):
         props = _show(
             unit,
@@ -123,8 +124,6 @@ def timer_status(cfg: Config) -> dict[str, Any]:
                 "LoadState",
                 "ActiveState",
                 "UnitFileState",
-                "NextElapseUSecRealtime",
-                "LastTriggerUSec",
                 "Persistent",
                 "TimersCalendar",
             ],
@@ -132,8 +131,9 @@ def timer_status(cfg: Config) -> dict[str, Any]:
         if not props or props.get("LoadState") in (None, "not-found"):
             info["units"][unit] = {"installed": False}
             continue
-        next_utc = _usec_to_iso(props.get("NextElapseUSecRealtime"))
-        last_utc = _usec_to_iso(props.get("LastTriggerUSec"))
+        raw = timers.get(unit, {})
+        next_utc = _usec_to_iso(raw.get("next"))
+        last_utc = _usec_to_iso(raw.get("last"))
         info["units"][unit] = {
             "installed": True,
             "load_state": props.get("LoadState"),
@@ -156,12 +156,39 @@ def timer_status(cfg: Config) -> dict[str, Any]:
     return info
 
 
-def _usec_to_iso(value: str | None) -> str | None:
+def _list_timers() -> dict[str, dict[str, int]]:
+    """Next/last activation in microseconds, straight from systemd.
+
+    ``systemctl show`` renders ``NextElapseUSecRealtime`` as a human-readable
+    local timestamp regardless of ``--timestamp``, which is awkward to parse back
+    reliably. ``list-timers --output=json`` gives the raw microsecond values.
+    """
+    code, out, _ = _systemctl("list-timers", "--all", "--output=json")
+    if code != 0 or not out.strip():
+        return {}
+    import json
+
+    try:
+        entries = json.loads(out)
+    except ValueError:
+        return {}
+    result: dict[str, dict[str, int]] = {}
+    for entry in entries:
+        unit = str(entry.get("unit", ""))
+        if unit:
+            result[unit] = {
+                "next": int(entry.get("next") or 0),
+                "last": int(entry.get("last") or 0),
+            }
+    return result
+
+
+def _usec_to_iso(value: str | int | None) -> str | None:
     if not value:
         return None
     try:
         usec = int(value)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
     if usec <= 0:
         return None

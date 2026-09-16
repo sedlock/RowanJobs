@@ -108,13 +108,15 @@ def run_doctor(cfg: Config) -> dict[str, Any]:
         checks.append(_check("integrity_check", integrity == ["ok"], ", ".join(integrity[:3])))
         backups = BackupManager(cfg)
         status = backups.status(db)
-        checks.append(
-            _check(
-                "local_backup",
-                status["local"]["state"] in ("VERIFIED", "UNCONFIGURED"),
-                f"{status['local']['state']}: {status['local']['detail']}",
-            )
-        )
+        ingested = int(db.scalar("SELECT COUNT(*) FROM posting_observations") or 0)
+        if status["local"]["state"] == "UNPROTECTED" and ingested == 0:
+            # Nothing has been collected yet, so there is nothing to protect.
+            local_ok: bool | None = None
+            local_detail = "no snapshot yet, and nothing has been collected to protect"
+        else:
+            local_ok = status["local"]["state"] in ("VERIFIED", "UNCONFIGURED")
+            local_detail = f"{status['local']['state']}: {status['local']['detail']}"
+        checks.append(_check("local_backup", local_ok, local_detail))
         checks.append(
             _check(
                 "offhost_backup",

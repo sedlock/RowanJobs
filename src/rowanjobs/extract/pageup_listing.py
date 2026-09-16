@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
 from lxml import html
@@ -135,7 +135,7 @@ def _first(node: html.HtmlElement, css_class: str) -> html.HtmlElement | None:
 def parse_listing(markup: str, base_url: str) -> ListingExtraction:
     warnings: list[str] = []
     try:
-        doc = html.document_fromstring(markup)
+        doc = cast("html.HtmlElement", html.document_fromstring(markup))
     except Exception as exc:  # noqa: BLE001
         return ListingExtraction(
             status="failed",

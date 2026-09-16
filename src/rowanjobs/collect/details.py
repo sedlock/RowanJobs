@@ -391,6 +391,8 @@ class DetailCollector:
         fetch_id, artifact_id = self.repo.record_fetch(fetch, self.run_id)
         observed_at = fetch.started_at_utc or utc_str()
 
+        outcome: str
+        detail: str | None
         if fetch.access_control_signal:
             outcome, detail = "failed", f"access control: {fetch.access_control_signal}"
         elif fetch.failure_kind == "blocked_destination":

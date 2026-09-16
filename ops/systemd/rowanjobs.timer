@@ -1,0 +1,16 @@
+[Unit]
+Description=RowanJobs daily collection at 06:15 America/New_York
+Documentation=https://github.com/sedlock/RowanJobs
+
+[Timer]
+Unit=rowanjobs.service
+OnCalendar=*-*-* 06:15:00 America/New_York
+# A missed activation (host asleep or powered off) triggers a CURRENT collection
+# after recovery. It does not, and cannot, reconstruct the snapshot that was
+# missed: that day stays a coverage gap.
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target
