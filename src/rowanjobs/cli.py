@@ -1037,26 +1037,55 @@ def cmd_record_deployment(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------- main
 
 
+def _common_options(parser: argparse.ArgumentParser, *, suppress: bool = False) -> None:
+    """Options accepted both before and after the subcommand.
+
+    On the subparser copy the defaults are SUPPRESSed: argparse writes
+    subparser defaults into the same namespace, so a plain ``store_true``
+    default would silently undo a ``--json`` given before the subcommand.
+    """
+    kw: dict[str, object] = {"default": argparse.SUPPRESS} if suppress else {}
+    parser.add_argument("--config", help="path to config.toml", **kw)  # type: ignore[arg-type]
+    parser.add_argument(
+        "--data-root",
+        help="override the data root (tests, restores)",
+        **kw,  # type: ignore[arg-type]
+    )
+    parser.add_argument(
+        "--db",
+        help="override the database path (tests, restores)",
+        **kw,  # type: ignore[arg-type]
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="machine-readable output",
+        **kw,  # type: ignore[arg-type]
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rowanjobs",
         description="Longitudinal archive of Rowan University job advertisements.",
     )
     parser.add_argument("--version", action="version", version=f"rowanjobs {__version__}")
-    parser.add_argument("--config", help="path to config.toml")
-    parser.add_argument("--data-root", help="override the data root (tests, restores)")
-    parser.add_argument("--db", help="override the database path (tests, restores)")
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    _common_options(parser)
+    # The same options are accepted after the subcommand too, so both
+    # `rowanjobs --json status` and `rowanjobs status --json` work. argparse
+    # would otherwise reject the second, which is the form everyone types.
+    shared = argparse.ArgumentParser(add_help=False)
+    _common_options(shared, suppress=True)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor", help="check the environment and configuration").set_defaults(
-        func=cmd_doctor
-    )
-    sub.add_parser("migrate", help="apply outstanding schema migrations").set_defaults(
-        func=cmd_migrate
-    )
+    sub.add_parser(
+        "doctor", parents=[shared], help="check the environment and configuration"
+    ).set_defaults(func=cmd_doctor)
+    sub.add_parser(
+        "migrate", parents=[shared], help="apply outstanding schema migrations"
+    ).set_defaults(func=cmd_migrate)
 
-    collect = sub.add_parser("collect", help="run a collection")
+    collect = sub.add_parser("collect", parents=[shared], help="run a collection")
     collect.add_argument(
         "--kind", choices=("daily", "retry", "manual", "verification"), default="manual"
     )
@@ -1070,39 +1099,43 @@ def build_parser() -> argparse.ArgumentParser:
     collect.set_defaults(func=cmd_collect)
 
     retry = sub.add_parser(
-        "retry", help="bounded same-day retry of an incomplete scheduled collection"
+        "retry",
+        parents=[shared],
+        help="bounded same-day retry of an incomplete scheduled collection",
     )
     retry.add_argument("--max-details", type=int)
     retry.add_argument("--no-verification", action="store_true")
     retry.add_argument("--no-backup", action="store_true")
     retry.set_defaults(func=cmd_retry)
 
-    status = sub.add_parser("status", help="operational state")
+    status = sub.add_parser("status", parents=[shared], help="operational state")
     status.add_argument("--no-timer", action="store_true", help="skip systemd inspection")
     status.set_defaults(func=cmd_status)
 
-    runs = sub.add_parser("runs", help="recent collection runs")
+    runs = sub.add_parser("runs", parents=[shared], help="recent collection runs")
     runs.add_argument("--limit", type=int, default=20)
     runs.set_defaults(func=cmd_runs)
 
-    show = sub.add_parser("show", help="inspect one archived advertisement")
+    show = sub.add_parser("show", parents=[shared], help="inspect one archived advertisement")
     show.add_argument("job_id")
     show.add_argument("--full", action="store_true", help="print the whole description")
     show.set_defaults(func=cmd_show)
 
-    history = sub.add_parser("history", help="observation history for one advertisement")
+    history = sub.add_parser(
+        "history", parents=[shared], help="observation history for one advertisement"
+    )
     history.add_argument("job_id")
     history.add_argument("--limit", type=int, default=50)
     history.set_defaults(func=cmd_history)
 
-    diff = sub.add_parser("diff", help="compare two archived content versions")
+    diff = sub.add_parser("diff", parents=[shared], help="compare two archived content versions")
     diff.add_argument("job_id")
     diff.add_argument("--from-version", dest="from_version")
     diff.add_argument("--to-version", dest="to_version")
     diff.set_defaults(func=cmd_diff)
 
     reprocess = sub.add_parser(
-        "reprocess", help="re-parse archived payloads; makes no network requests"
+        "reprocess", parents=[shared], help="re-parse archived payloads; makes no network requests"
     )
     reprocess.add_argument("what", choices=("details", "listings", "all"), default="all", nargs="?")
     reprocess.add_argument("--job-id")
@@ -1114,13 +1147,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reprocess.set_defaults(func=cmd_reprocess)
 
-    backup = sub.add_parser("backup", help="create a verified snapshot")
+    backup = sub.add_parser("backup", parents=[shared], help="create a verified snapshot")
     backup.add_argument(
         "--kind", default="manual", choices=("daily", "weekly", "monthly", "manual", "predeploy")
     )
     backup.set_defaults(func=cmd_backup)
 
-    verify = sub.add_parser("verify", help="verify archive integrity and payload hashes")
+    verify = sub.add_parser(
+        "verify", parents=[shared], help="verify archive integrity and payload hashes"
+    )
     verify.add_argument("--limit", type=int, help="only check this many payloads")
     verify.add_argument(
         "--restore",
@@ -1129,12 +1164,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.set_defaults(func=cmd_verify)
 
-    restore = sub.add_parser("restore", help="restore a snapshot to a new location")
+    restore = sub.add_parser(
+        "restore", parents=[shared], help="restore a snapshot to a new location"
+    )
     restore.add_argument("destination")
     restore.add_argument("--source", help="snapshot to restore (default: latest verified)")
     restore.set_defaults(func=cmd_restore)
 
-    export = sub.add_parser("export", help="export a dataset")
+    export = sub.add_parser("export", parents=[shared], help="export a dataset")
     export.add_argument("dataset")
     export.add_argument("--format", choices=("json", "csv"), default="json")
     export.add_argument("--output", help="write to a file instead of stdout")
@@ -1142,7 +1179,9 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--limit", type=int)
     export.set_defaults(func=cmd_export)
 
-    deploy = sub.add_parser("record-deployment", help="write the runtime deployment manifest")
+    deploy = sub.add_parser(
+        "record-deployment", parents=[shared], help="write the runtime deployment manifest"
+    )
     deploy.add_argument("--note")
     deploy.set_defaults(func=cmd_record_deployment)
     return parser

@@ -356,17 +356,13 @@ def test_disagreeing_job_number_label_and_span_are_both_preserved(
     collector, register, db: Database
 ) -> None:
     posting_id = register(JOB_A, URL_A)
+    # The labelled value reads "501826 999999" while the span says "501826".
+    markup = build_detail_page(job_id=JOB_A).replace(
+        f'<span class="job-externalJobNo">{JOB_A}</span>',
+        f'<span class="job-externalJobNo">{JOB_A}</span> 999999',
+    )
     source = FakeSource()
-    source.page(URL_A, build_detail_page(job_id=JOB_A, job_no_span=JOB_A))
-    # The labelled value says one thing, the span another.
-    source._routes[URL_A] = [
-        html_response(
-            build_detail_page(job_id=JOB_A).replace(
-                f'<span class="job-externalJobNo">{JOB_A}</span>',
-                f'<span class="job-externalJobNo">{JOB_A}</span> 999999',
-            )
-        )
-    ]
+    source.page(URL_A, markup)
 
     outcome = collector(source).collect(
         external_job_id=JOB_A, url=URL_A, posting_id=posting_id, checked_because="listed"

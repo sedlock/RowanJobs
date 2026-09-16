@@ -59,9 +59,9 @@ uv run rowanjobs collect --kind manual  # one collection, paced and bounded
 uv run rowanjobs status                 # what happened, and how trustworthy it is
 ```
 
-Note the flag position: `--json`, `--config`, `--data-root` and `--db` are
-**global** options and must precede the subcommand — `rowanjobs --json status`,
-not `rowanjobs status --json` (`src/rowanjobs/cli.py::build_parser`).
+`--json`, `--config`, `--data-root` and `--db` are accepted **either before or
+after** the subcommand: `rowanjobs --json status` and `rowanjobs status --json`
+both work (`src/rowanjobs/cli.py::build_parser`).
 
 ## Commands
 

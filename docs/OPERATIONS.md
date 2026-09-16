@@ -97,15 +97,16 @@ inside a container).
 
 ### `status --json`
 
-The flag is **global** and must precede the subcommand:
+Both forms work; `--json` is accepted before or after the subcommand
+(`src/rowanjobs/cli.py::_common_options`):
 
 ```sh
 rowanjobs --json status
+rowanjobs status --json
 ```
 
-`rowanjobs status --json` is an argparse error (`unrecognized arguments: --json`),
-because `--json` is defined on the top-level parser. The systemd units use the
-correct form (`rowanjobs --json collect --kind daily`).
+The systemd units use the pre-subcommand form
+(`rowanjobs --json collect --kind daily`).
 
 The same payload is written atomically to `<data_root>/runtime/health.json` after
 every collection (`src/rowanjobs/ops/health.py::write_health`,
@@ -437,9 +438,10 @@ meaning changes, so a consumer can tell.
 ### Host-down detection
 
 **Host-down detection requires an external observer. A local timer cannot report
-while the host is unavailable.** This sentence is emitted verbatim in
-`health.notes` on every status call, because it is the one failure mode this
-design cannot cover from the inside: if the machine is off, asleep, or
+while the host is unavailable.** `health.notes` carries this caveat on every
+status call (naming the host: *"A local timer cannot report while entropy is
+unavailable."*), because it is the one failure mode this design cannot cover
+from the inside: if the machine is off, asleep, or
 unreachable, there is nothing running to notice or to tell anyone. A stale
 `health.json` timestamp is the only local trace, and reading it also requires
 the host to be up.

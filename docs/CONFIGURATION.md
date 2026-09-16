@@ -18,9 +18,11 @@ a warning — a typo must not silently leave a policy at its default.
 | Data root | `--data-root PATH` → `data_root` in the config file → `$ROWANJOBS_DATA_ROOT` → `$XDG_DATA_HOME/rowanjobs` → `~/.local/share/rowanjobs` |
 | Database path | `--db PATH` → `db_path` in the config file → `$ROWANJOBS_DB` → `<data_root>/rowanjobs.db` |
 
-`--config`, `--data-root` and `--db` are **global** flags and must precede the
-subcommand: `rowanjobs --data-root /tmp/scratch collect`, not
-`rowanjobs collect --data-root /tmp/scratch`. The same applies to `--json`.
+`--config`, `--data-root`, `--db` and `--json` are accepted **either before or
+after** the subcommand — `rowanjobs --data-root /tmp/scratch collect` and
+`rowanjobs collect --data-root /tmp/scratch` are equivalent. The subcommand copy
+uses `argparse.SUPPRESS` defaults so that a value given before the subcommand is
+not silently overwritten (`src/rowanjobs/cli.py::_common_options`).
 
 Environment variables are read in `src/rowanjobs/paths.py`
 (`ENV_CONFIG = "ROWANJOBS_CONFIG"`, `ENV_DATA_ROOT = "ROWANJOBS_DATA_ROOT"`,
