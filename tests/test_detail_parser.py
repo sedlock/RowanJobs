@@ -241,8 +241,18 @@ def test_message_list_closure_template_is_captured_as_the_closure_signal() -> No
     assert "no longer available" in extraction.closure_signal
 
 
-def test_closure_phrase_in_the_body_is_recognised_without_a_message_list() -> None:
-    extraction = parse(build_detail_page(body_html="<p>This job is no longer advertised.</p>"))
+def test_a_closure_template_without_a_message_list_is_recognised() -> None:
+    """The phrase counts when it replaces the advertisement, not when it is in it.
+
+    With no ``#job-details`` region the container text *is* the page's message,
+    so a closure phrase there is a genuine closed template.
+    """
+    extraction = parse(
+        build_detail_page(
+            include_job_details=False,
+            extra_body_html="<p>This job is no longer advertised.</p>",
+        )
+    )
     assert extraction.closure_signal == "closure phrase: 'this job is no longer'"
 
 
@@ -314,3 +324,45 @@ def test_application_workflow_links_are_never_followed(captured: str) -> None:
     apply_links = [link for link in extraction.links if link["classification"] == "apply_workflow"]
     assert apply_links
     assert all(link["collection_decision"] == "exclude" for link in apply_links)
+
+
+def test_a_closure_phrase_in_the_advertisement_prose_is_not_a_closure() -> None:
+    """Advertisements say things like "no longer available" about other things.
+
+    Reading the body for closure vocabulary would declare a live, listed
+    advertisement closed and, worse, discard its captured description.
+    """
+    extraction = parse(
+        build_detail_page(
+            body_html=(
+                "<p>Duties as assigned.</p>"
+                "<p>Note: on-campus parking permits are no longer available to "
+                "part-time staff, and the previous trial has been filled.</p>"
+            )
+        )
+    )
+
+    assert extraction.closure_signal is None
+    assert extraction.description_text
+    assert "no longer available" in extraction.description_text
+
+
+def test_an_unrelated_message_list_notice_is_not_a_closure() -> None:
+    """#message-list is always present on this source and usually empty.
+
+    Treating any text in it as closure would flip every advertisement to
+    "closed" the day the site starts showing a banner there.
+    """
+    extraction = parse(
+        build_detail_page(messages="<li>Your session has expired. Please sign in again.</li>")
+    )
+
+    assert extraction.closure_signal is None
+    assert extraction.description_text
+
+
+def test_a_real_closure_notice_is_still_detected() -> None:
+    extraction = parse(build_detail_page(messages="<li>This job is no longer available.</li>"))
+
+    assert extraction.closure_signal is not None
+    assert "no longer available" in extraction.closure_signal

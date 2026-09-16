@@ -368,7 +368,7 @@ def test_priming_installs_the_token_the_browser_step_returned(make_client) -> No
     class StubSolver:
         last_error = None
 
-        def solve(self, _url: str) -> dict[str, str]:
+        def solve(self, _url: str, *, force: bool = False) -> dict[str, str]:
             return {"aws-waf-token": "issued-token"}
 
     source = FakeSource()
@@ -379,7 +379,7 @@ def test_priming_installs_the_token_the_browser_step_returned(make_client) -> No
 
     assert result["primed"] is True
     assert result["cookies"] == ["aws-waf-token"]
-    assert source.requests == []
+    assert source.requests == [], "the browser step makes no HTTP request of its own"
     client.fetch(LISTING_URL, purpose="listing_page")
     assert source.requests[0].headers.get("cookie") == "aws-waf-token=issued-token"
 
@@ -388,7 +388,7 @@ def test_a_solver_that_cannot_issue_a_token_is_reported_not_hidden(make_client) 
     class FailingSolver:
         last_error = "browser visit produced no access token"
 
-        def solve(self, _url: str) -> None:
+        def solve(self, _url: str, *, force: bool = False) -> None:
             return None
 
     client = make_client(FakeSource(), challenge_solver=FailingSolver())
@@ -443,3 +443,46 @@ def test_superseded_attempts_reach_the_archive_as_their_own_fetch_rows(make_clie
         (1, "aws-waf-challenge"),
         (2, None),
     ]
+
+
+def test_the_browser_step_is_charged_to_the_request_budget(make_client, budget) -> None:
+    """A browser page load is live traffic and must not be invisible.
+
+    It reaches the source and pulls every subresource the page references, so
+    leaving it outside the budget would make the one-budget guarantee true only
+    of the HTTP path.
+    """
+
+    class StubSolver:
+        last_error = None
+
+        def solve(self, _url: str, *, force: bool = False) -> dict[str, str]:
+            return {"aws-waf-token": "t"}
+
+    client = make_client(FakeSource(), challenge_solver=StubSolver())
+    before = budget.stats.requests
+
+    client.prime(LISTING_URL)
+
+    assert budget.stats.requests == before + 1
+
+
+def test_the_browser_step_refuses_a_destination_the_policy_rejects(make_client) -> None:
+    class StubSolver:
+        last_error = None
+
+        def __init__(self) -> None:
+            self.visited: list[str] = []
+
+        def solve(self, url: str, *, force: bool = False) -> dict[str, str]:
+            self.visited.append(url)
+            return {"aws-waf-token": "t"}
+
+    solver = StubSolver()
+    client = make_client(FakeSource(), challenge_solver=solver)
+
+    result = client.prime("https://elsewhere.example/listing/")
+
+    assert result["primed"] is False
+    assert "DestinationError" in str(result["reason"])
+    assert solver.visited == []

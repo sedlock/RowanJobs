@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .. import CONTRACT_VERSION, EVENT_RULES_VERSION
+from .. import CONTRACT_VERSION, EVENT_RULES_VERSION, PARSER_VERSION, TEXT_CONTRACT_VERSION
 from ..timeutil import utc_str
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -63,9 +63,13 @@ class EventDeriver:
         slot_local_date: str | None,
         qualified_scan: ScanResult | None,
         listed_ids: set[str],
+        listed_in_any_qualified_scan: set[str] | None = None,
     ) -> EventSummary:
         summary = EventSummary()
         group = self.cfg.collection.comparability_group
+        seen_this_run = listed_in_any_qualified_scan
+        if seen_this_run is None:
+            seen_this_run = set(listed_ids)
 
         if qualified_scan is None or not qualified_scan.qualified:
             # No qualified scan: positive observations stay, absence analysis is
@@ -100,6 +104,26 @@ class EventDeriver:
             job_id = str(posting["external_job_id"])
             listed = job_id in listed_ids
             seen_at = qualified_scan.entry_times.get(job_id, scan_end)
+
+            if not listed and job_id in seen_this_run:
+                # A different qualified traversal in this same run listed it.
+                # Recording absence here would contradict our own evidence, so
+                # the disagreement becomes a coverage exception instead.
+                self.repo.record_gap(
+                    kind="listing_disagreement_within_run",
+                    scope="listing",
+                    run_id=run_id,
+                    posting_id=posting_id,
+                    slot_local_date=slot_local_date,
+                    detail=(
+                        "another qualified traversal in this run listed this "
+                        "advertisement, so its absence from the final traversal is "
+                        "not evidence that it was withdrawn"
+                    ),
+                    evidence={"scan_id": scan_id, "external_job_id": job_id},
+                )
+                summary.coverage_gaps += 1
+                continue
             previous = self._previous_presence(posting_id)
 
             if listed:
@@ -201,6 +225,9 @@ class EventDeriver:
         for row in rows:
             posting_id = int(row["posting_id"])
             version_id = int(row["posting_version_id"])
+            # Same *lineage*, not merely the same comparison contract: a
+            # parser or text-contract bump starts a parallel line of versions
+            # and must never look like the employer edited the advertisement.
             previous = self.repo.db.one(
                 """
                 SELECT o.posting_version_id, o.observed_at_utc
@@ -213,6 +240,8 @@ class EventDeriver:
                    AND o.posting_version_id IS NOT NULL
                    AND o.availability_state = 'content_captured'
                    AND v.contract_version = ?
+                   AND v.text_contract_version = ?
+                   AND COALESCE(v.parser_version, ?) = ?
                  ORDER BY o.observed_at_utc DESC, o.observation_id DESC
                  LIMIT 1
                 """,
@@ -221,6 +250,9 @@ class EventDeriver:
                     int(row["observation_id"]),
                     str(row["observed_at_utc"]),
                     CONTRACT_VERSION,
+                    TEXT_CONTRACT_VERSION,
+                    PARSER_VERSION,
+                    PARSER_VERSION,
                 ),
             )
             if previous is None:
@@ -239,7 +271,9 @@ class EventDeriver:
                 slot_local_date,
                 group,
                 {
+                    "parser_version": PARSER_VERSION,
                     "contract_version": CONTRACT_VERSION,
+                    "text_contract_version": TEXT_CONTRACT_VERSION,
                     "note": "the change happened somewhere inside this interval; the "
                     "exact edit time is not observable",
                 },

@@ -232,12 +232,15 @@ def test_a_definite_not_found_is_recorded_as_not_found(collector, register, db: 
 def test_a_closure_template_is_an_explicit_closure_not_a_capture(
     collector, register, db: Database
 ) -> None:
+    """A real closure template replaces the advertisement rather than sitting beside it."""
     posting_id = register(JOB_A, URL_A)
     source = FakeSource()
     source.page(
         URL_A,
         build_detail_page(
-            job_id=JOB_A, messages="<li>The job you are looking for is no longer available.</li>"
+            job_id=JOB_A,
+            include_job_details=False,
+            messages="<li>The job you are looking for is no longer available.</li>",
         ),
     )
 
@@ -689,3 +692,42 @@ def test_a_document_edited_at_the_same_url_is_captured_twice_with_its_own_times(
     )
     assert len(parent_artifacts) == 1
     assert int(db.scalar("SELECT COUNT(*) FROM posting_observations")) == 2
+
+
+def test_a_closure_notice_alongside_a_body_captures_the_content_as_a_conflict(
+    collector, register, db: Database
+) -> None:
+    """A page cannot be both closed and a complete advertisement.
+
+    Treating the notice as authoritative would discard the description that was
+    right there on the page, and assert a closure the employer did not display.
+    """
+    posting_id = register(JOB_A, URL_A)
+    source = FakeSource().page(
+        URL_A,
+        build_detail_page(
+            job_id=JOB_A,
+            messages="<li>This job is no longer available.</li>",
+            body_html="<p>A complete advertisement body that must survive.</p>",
+        ),
+    )
+
+    outcome = collector(source).collect(
+        external_job_id=JOB_A, url=URL_A, posting_id=posting_id, checked_because="listed"
+    )
+
+    assert outcome.availability_state == "content_captured"
+    assert outcome.posting_version_id is not None
+
+    row = db.one(
+        "SELECT conflicts_json FROM posting_observations WHERE observation_id = ?",
+        (outcome.observation_id,),
+    )
+    conflicts = json.loads(str(row["conflicts_json"]))
+    assert any(c["kind"] == "closure_signal_with_content" for c in conflicts)
+
+    version = db.one(
+        "SELECT description_text FROM posting_versions WHERE posting_version_id = ?",
+        (outcome.posting_version_id,),
+    )
+    assert "must survive" in str(version["description_text"])

@@ -191,8 +191,9 @@ class DetailCollector:
                 conflicts=conflicts,
             )
 
-        if extraction.description_html is None or extraction.closure_signal:
-            state = "explicit_closure" if extraction.closure_signal else "not_found"
+        if extraction.description_html is None:
+            # No advertisement body. A closure template says so explicitly; an
+            # empty container does not, and the two are kept apart.
             return self._record(
                 external_job_id,
                 posting_id,
@@ -200,7 +201,9 @@ class DetailCollector:
                 fetch_id,
                 observed_at,
                 identity_state=identity_state,
-                availability_state=state,
+                availability_state=(
+                    "explicit_closure" if extraction.closure_signal else "not_found"
+                ),
                 availability_detail=extraction.closure_signal
                 or "recognised page carried no advertisement body",
                 redirect_class=redirect_class,
@@ -208,6 +211,21 @@ class DetailCollector:
                 extraction_id=extraction_id,
                 observed_external_job_id=observed_id,
                 conflicts=conflicts,
+            )
+
+        if extraction.closure_signal:
+            # A closure notice alongside a full advertisement body is a
+            # contradiction, not a closure. Capturing the content and recording
+            # the disagreement keeps the evidence; treating it as closure would
+            # throw the description away and assert something the page did not.
+            conflicts.append(
+                {
+                    "kind": "closure_signal_with_content",
+                    "closure_signal": extraction.closure_signal,
+                    "note": "the page showed a closure-like notice and a complete "
+                    "advertisement body; the content is captured and the notice is "
+                    "preserved unresolved",
+                }
             )
 
         if posting_id is None:

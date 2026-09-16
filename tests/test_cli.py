@@ -78,7 +78,9 @@ def test_migrate_creates_the_schema_and_reports_the_versions(
     payload = captured_json(capsys)
     assert payload["version_before"] == 0
     assert payload["version_after"] == payload["expected"]
-    assert payload["applied"] == [1, 2]
+    # Every migration, in order, rather than a hard-coded list that has to be
+    # edited each time one is added.
+    assert payload["applied"] == list(range(1, payload["expected"] + 1))
     assert Path(payload["database"]) == cfg.layout.db_path
     assert cfg.layout.db_path.exists()
 
@@ -460,9 +462,14 @@ def test_diff_reports_what_changed_between_two_content_versions(
     payload = captured_json(capsys)
     assert payload["changed"]["description_text"] is True
     assert payload["changed"]["title"] is False
-    assert payload["contract_version"] == "1.0.0"
+    assert payload["comparison_lineage"] == {
+        "parser_version": "1.0.0",
+        "contract_version": "1.0.0",
+        "text_contract_version": "1.0.0",
+    }
     assert any(line.startswith("+Edited wording.") for line in payload["unified_diff"])
-    assert "parser upgrade cannot appear here as a source edit" in payload["note"]
+    assert "cannot appear here as a source edit" in payload["note"]
+    assert "comparison lineage" in payload["note"]
 
 
 def test_doctor_reports_a_rejected_configuration_instead_of_crashing(tmp_path, capsys) -> None:

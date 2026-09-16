@@ -155,6 +155,16 @@ class ArchiveStore:
                 f"artifact {artifact_id} decompressed to {len(data)} bytes, "
                 f"expected {row['byte_length']}"
             )
+        # Check identity, not just size. Small payloads are stored uncompressed,
+        # so without this there is no integrity check at all on the read path --
+        # and silently returning corrupted bytes is the worst possible failure
+        # for an evidence archive.
+        actual = content_hash(data)
+        if actual != row["sha256"]:
+            raise ValueError(
+                f"artifact {artifact_id} failed its content hash: stored "
+                f"{row['sha256']}, computed {actual}"
+            )
         return data
 
     def verify(self, artifact_id: int) -> tuple[bool, str]:

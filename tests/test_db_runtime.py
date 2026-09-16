@@ -7,6 +7,7 @@ migrate or mutate production data.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import apsw
@@ -257,4 +258,39 @@ def test_version_values_accept_every_documented_field_state(
             "INSERT INTO version_values(posting_version_id, field_key, ordinal, "
             "field_state, origin) VALUES (?,?,?,?,?)",
             (version_id, "location", 99, "probably", "detail_labelled"),
+        )
+
+
+def test_the_availability_guard_matches_the_documented_states(db) -> None:
+    """The trigger and the Python enumeration must not drift apart.
+
+    availability_state decides whether an advertisement counts as present,
+    closed or merely unobserved. A state the database accepts but the code does
+    not enumerate would be silently missing from every query.
+    """
+    from rowanjobs.constants import AVAILABILITY_STATES
+
+    sql = db.scalar(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='trg_observation_availability_insert'"
+    )
+    assert sql, "the availability guard trigger must exist"
+    for state in AVAILABILITY_STATES:
+        assert f"'{state}'" in sql, f"{state} is not covered by the guard"
+    quoted = re.findall(r"'([a-z_]+)'", str(sql))
+    assert set(quoted) - {"unknown availability_state"} == set(AVAILABILITY_STATES)
+
+
+def test_an_unknown_availability_state_is_rejected(db) -> None:
+    with db.write():
+        db.execute(
+            "INSERT INTO sources(namespace, display_name, base_url, adapter, created_at_utc) "
+            "VALUES ('t','t','https://x','a','2026-09-16T00:00:00Z')"
+        )
+    with pytest.raises(apsw.ConstraintError), db.write():
+        db.execute(
+            "INSERT INTO posting_observations("
+            "run_id, expected_external_job_id, requested_url, observed_at_utc, "
+            "identity_state, availability_state, checked_because) "
+            "VALUES (NULL,'1','https://x','2026-09-16T00:00:00Z','match','invented','listed')"
         )

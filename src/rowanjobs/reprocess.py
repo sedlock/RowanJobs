@@ -57,8 +57,17 @@ def reprocess_details(
     *,
     job_id: str | None = None,
     limit: int | None = None,
-    relink: bool = True,
+    relink: bool = False,
 ) -> ReprocessReport:
+    """Re-parse archived detail payloads.
+
+    ``relink`` rewrites ``posting_observations.extraction_id`` and
+    ``posting_version_id`` to point at the new reading. It is **off by default**:
+    it is the one operation in this project that mutates an evidence row, and it
+    destroys the record of which interpretation an observation was originally
+    made under. Suppressing spurious change events does not need it -- the
+    lineage scoping in :mod:`rowanjobs.collect.events` already does that.
+    """
     repo = Repository(db)
     store = ArchiveStore(db)
     report = ReprocessReport(parser="pageup_detail", started_at_utc=utc_str())

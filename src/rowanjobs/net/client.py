@@ -226,7 +226,7 @@ class SourceClient:
                 "reason": "no challenge solver configured",
             }
         try:
-            cookies = self.challenge_solver.solve(url)
+            cookies = self._solve(url)
         except Exception as exc:  # noqa: BLE001 - priming is best effort
             return {"primed": False, "required": True, "reason": f"{type(exc).__name__}: {exc}"}
         if not cookies:
@@ -243,6 +243,21 @@ class SourceClient:
         for name, value in cookies.items():
             self._client.cookies.set(name, value, domain=host)
         return {"primed": True, "required": True, "cookies": sorted(cookies)}
+
+    def _solve(self, url: str, *, force: bool = False) -> dict[str, str] | None:
+        """Run the browser step under the same policy and budget as any request.
+
+        A browser page load is live traffic: it reaches the source and every
+        subresource the page references. It goes through the destination policy
+        and is charged to the run's request budget, so the one-budget guarantee
+        stays true rather than being true only of the HTTP path.
+        """
+        if self.challenge_solver is None:
+            return None
+        checked = self.policy.check(url)
+        self.budget.acquire()
+        solved: dict[str, str] | None = self.challenge_solver.solve(checked, force=force)
+        return solved
 
     def fetch(
         self,
@@ -313,7 +328,7 @@ class SourceClient:
         if self.challenge_solver is not None:
             self.challenge_solve_attempts += 1
             try:
-                cookies = self.challenge_solver.solve(result.requested_url, force=True)
+                cookies = self._solve(result.requested_url, force=True)
             except Exception as exc:  # noqa: BLE001 - solver is best effort
                 result.failure_detail = f"challenge solver failed: {exc}"
                 cookies = None
@@ -394,14 +409,18 @@ class SourceClient:
                                 at_utc=utc_str(now_utc()),
                             )
                         )
-                        # Drain so the connection can be reused.
-                        body = self._read_capped(response, result, 64 * 1024)
+                        # Drain so the connection can be reused. The redirect
+                        # body is recorded on a throwaway result: a large 3xx
+                        # body must not mark the completed final fetch partial.
+                        drain = FetchResult(purpose=purpose, requested_url=current)
+                        body = self._read_capped(response, drain, 64 * 1024)
                         if not location:
                             result.failure_kind = "http_error"
                             result.failure_detail = "redirect without Location"
-                            result.response_state = "complete"
+                            result.response_state = drain.response_state or "complete"
                             result.body = body
-                            result.capture_state = "complete"
+                            result.capture_state = drain.capture_state or "complete"
+                            result.capture_exception = drain.capture_exception
                             return result
                         current = str(httpx.URL(current).join(location))
                         continue

@@ -61,6 +61,11 @@ class BackupResult:
     def ok(self) -> bool:
         return self.state == "VERIFIED"
 
+    @property
+    def usable(self) -> bool:
+        """A snapshot exists, even if verification was switched off."""
+        return self.state in ("VERIFIED", "UNVERIFIED")
+
 
 @dataclass
 class RestoreCheck:
@@ -134,10 +139,13 @@ class BackupManager:
 
         backup_id = self._record(db, final, manifest_path, manifest, offhost)
         pruned = self.prune(db)
+        skipped = verification["state"] == "SKIPPED"
         return BackupResult(
-            "VERIFIED" if verification["state"] in ("OK", "SKIPPED") else "DEGRADED",
+            "UNVERIFIED" if skipped else "VERIFIED",
             final,
-            "snapshot created and verified",
+            "snapshot created, verification disabled in configuration"
+            if skipped
+            else "snapshot created and verified",
             manifest=manifest,
             backup_id=backup_id,
             pruned=pruned,
@@ -304,7 +312,9 @@ class BackupManager:
             "SELECT backup_id, path, kind, snapshot_at_utc, verification_state "
             "FROM backups WHERE pruned_at_utc IS NULL ORDER BY snapshot_at_utc DESC"
         )
-        verified = [r for r in rows if str(r["verification_state"]) in ("OK", "SKIPPED")]
+        # Only a genuinely verified copy protects anything, so an unverified
+        # snapshot can never be the reason an older verified one is dropped.
+        verified = [r for r in rows if str(r["verification_state"]) == "OK"]
         if len(verified) <= 1:
             return []
 
@@ -352,7 +362,7 @@ class BackupManager:
     def latest(self, db: Database) -> dict[str, Any] | None:
         return db.one(
             "SELECT * FROM backups WHERE pruned_at_utc IS NULL "
-            "AND verification_state IN ('OK','SKIPPED') "
+            "AND verification_state = 'OK' "
             "ORDER BY snapshot_at_utc DESC LIMIT 1"
         )
 

@@ -77,9 +77,10 @@ SELECT
     latest_any.identity_state      AS last_identity_state,
     latest_any.observed_at_utc     AS last_check_at_utc,
     CASE
+        -- "carried forward" implies there is content to carry; check that first.
+        WHEN latest.observed_at_utc IS NULL THEN 'never-captured'
         WHEN latest_any.availability_state IN ('access_control_challenge','retrieval_failed')
             THEN 'carried-forward-uncertain'
-        WHEN latest.observed_at_utc IS NULL THEN 'never-captured'
         WHEN latest_any.observed_at_utc = latest.observed_at_utc THEN 'checked'
         ELSE 'carried-forward'
     END AS content_freshness,
@@ -103,6 +104,10 @@ LEFT JOIN (
     WHERE o.observation_id = (
         SELECT o2.observation_id FROM posting_observations o2
         WHERE o2.posting_id = o.posting_id AND o2.posting_version_id IS NOT NULL
+          -- Same identity requirement as v_last_captured, so this view cannot
+          -- report content as freshly checked that v_last_captured says was
+          -- never captured.
+          AND o2.identity_state = 'match'
         ORDER BY o2.observed_at_utc DESC, o2.observation_id DESC LIMIT 1)
 ) latest ON latest.posting_id = p.posting_id
 LEFT JOIN (

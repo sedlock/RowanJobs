@@ -20,7 +20,7 @@ import json
 from hashlib import sha256
 from typing import Any
 
-from .. import CONTRACT_VERSION, TEXT_CONTRACT_VERSION
+import rowanjobs
 
 
 def _digest(*parts: str) -> str:
@@ -31,15 +31,15 @@ def _digest(*parts: str) -> str:
     return h.hexdigest()
 
 
-def text_fingerprint(text: str | None, contract: str = TEXT_CONTRACT_VERSION) -> str:
-    return _digest("text", contract, text or "")
+def text_fingerprint(text: str | None, contract: str | None = None) -> str:
+    return _digest("text", contract or rowanjobs.TEXT_CONTRACT_VERSION, text or "")
 
 
-def html_fingerprint(markup: str | None, contract: str = CONTRACT_VERSION) -> str:
-    return _digest("html", contract, markup or "")
+def html_fingerprint(markup: str | None, contract: str | None = None) -> str:
+    return _digest("html", contract or rowanjobs.CONTRACT_VERSION, markup or "")
 
 
-def metadata_fingerprint(values: list[dict[str, Any]], contract: str = CONTRACT_VERSION) -> str:
+def metadata_fingerprint(values: list[dict[str, Any]], contract: str | None = None) -> str:
     """Fingerprint the labelled source fields.
 
     Order matters: the source presents Job no / Work type / Location /
@@ -59,7 +59,26 @@ def metadata_fingerprint(values: list[dict[str, Any]], contract: str = CONTRACT_
         for v in values
     ]
     blob = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return _digest("metadata", contract, blob)
+    return _digest("metadata", contract or rowanjobs.CONTRACT_VERSION, blob)
+
+
+def comparison_lineage(
+    parser: str | None = None,
+    contract: str | None = None,
+    text_contract: str | None = None,
+) -> str:
+    """The identity of the interpretation, as opposed to the content.
+
+    Two extracted versions are only comparable when this matches. Folding it
+    into the content fingerprint is what stops a parser or contract upgrade from
+    ever being recorded as a website edit: the upgraded reading starts a
+    parallel line of versions instead of appearing to change the old one.
+    """
+    return (
+        f"{parser or rowanjobs.PARSER_VERSION}"
+        f"|{contract or rowanjobs.CONTRACT_VERSION}"
+        f"|{text_contract or rowanjobs.TEXT_CONTRACT_VERSION}"
+    )
 
 
 def content_fingerprint(
@@ -68,8 +87,15 @@ def content_fingerprint(
     description_text_fp: str,
     description_html_fp: str,
     metadata_fp: str,
-    contract: str = CONTRACT_VERSION,
+    contract: str | None = None,
+    parser: str | None = None,
+    text_contract: str | None = None,
 ) -> str:
     return _digest(
-        "content", contract, title or "", description_text_fp, description_html_fp, metadata_fp
+        "content",
+        comparison_lineage(parser, contract, text_contract),
+        title or "",
+        description_text_fp,
+        description_html_fp,
+        metadata_fp,
     )

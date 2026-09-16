@@ -11,13 +11,20 @@ from collections.abc import Callable
 
 from ...timeutil import utc_str
 from ..connection import Database
-from . import m0001_initial, m0002_views
+from . import (
+    m0001_initial,
+    m0002_views,
+    m0003_comparison_lineage,
+    m0004_availability_guard,
+)
 
 Migration = tuple[int, str, Callable[[Database], None]]
 
 MIGRATIONS: list[Migration] = [
     (1, "initial", m0001_initial.upgrade),
     (2, "views", m0002_views.upgrade),
+    (3, "comparison_lineage", m0003_comparison_lineage.upgrade),
+    (4, "availability_guard", m0004_availability_guard.upgrade),
 ]
 
 SCHEMA_VERSION = max(v for v, _, _ in MIGRATIONS)

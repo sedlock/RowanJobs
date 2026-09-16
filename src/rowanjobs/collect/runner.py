@@ -314,6 +314,7 @@ class Collector:
 
         # --- 5/6. reconcile identifier sets ---------------------------------
         reconciliation: ScanResult | None = None
+        reconciled = False
         set_comparison: dict[str, Any] = {"performed": False}
         if discovery and verification:
             added = sorted(set(verification.unique_ids) - set(discovery.unique_ids))
@@ -338,8 +339,20 @@ class Collector:
                 reconciliation = self._scan(scanner, 3, "reconciliation", errors)
                 if reconciliation:
                     union_ids |= set(reconciliation.unique_ids)
+                    # Qualifying is not the same as agreeing. A third traversal
+                    # that reports a third different set has not settled
+                    # anything, and treating it as settled would let the run
+                    # conclude that an advertisement a qualified scan listed
+                    # minutes earlier was absent.
+                    agrees_with = [
+                        role
+                        for role, scan in (("discovery", discovery), ("verification", verification))
+                        if set(reconciliation.unique_ids) == set(scan.unique_ids)
+                    ]
                     set_comparison["reconciliation_unique"] = len(reconciliation.unique_ids)
                     set_comparison["reconciliation_qualified"] = reconciliation.qualified
+                    set_comparison["reconciliation_agrees_with"] = agrees_with
+                    reconciled = bool(reconciliation.qualified and agrees_with)
 
         # --- qualified scan selection ---------------------------------------
         final_scan = self._final_qualified(discovery, verification, reconciliation)
@@ -348,7 +361,7 @@ class Collector:
         unresolved = bool(
             set_comparison.get("performed")
             and not set_comparison.get("sets_match")
-            and (reconciliation is None or not reconciliation.qualified)
+            and not reconciled
         )
         if unresolved:
             repo.record_gap(
@@ -364,12 +377,22 @@ class Collector:
             )
             errors.append({"kind": "listing_set_unreconciled", "detail": set_comparison})
 
+        # Every advertisement any qualified traversal in this run saw listed.
+        # An absence claim may never contradict one of them: within a single run
+        # the honest reading is "it was there when we looked", not "it was gone
+        # by the last look".
+        listed_anywhere: set[str] = set()
+        for scan in (discovery, verification, reconciliation):
+            if scan is not None and scan.qualified:
+                listed_anywhere |= set(scan.unique_ids)
+
         # --- events ----------------------------------------------------------
         events = deriver.derive_for_run(
             run_id=run_id,
             slot_local_date=slot_date,
             qualified_scan=None if unresolved else final_scan,
             listed_ids=listed_ids,
+            listed_in_any_qualified_scan=listed_anywhere,
         )
 
         # --- recheck policy ---------------------------------------------------
@@ -496,13 +519,16 @@ class Collector:
         """Known URLs that are no longer listed but may still serve content."""
         cfg = self.cfg.collection
         now = now_utc()
+        # Least-recently-checked first. Posting-id order would recheck the same
+        # first N unlisted advertisements every run and never reach the tail.
         rows = repo.db.query(
             """
             SELECT p.posting_id, p.external_job_id,
                    COALESCE(r.tier, 'daily') AS tier,
-                   r.next_due_at_utc
+                   r.next_due_at_utc, r.last_checked_at_utc
               FROM postings p
               LEFT JOIN recheck_policy r ON r.posting_id = p.posting_id
+             ORDER BY COALESCE(r.last_checked_at_utc, '') ASC, p.posting_id ASC
             """
         )
         queued = 0
@@ -694,10 +720,14 @@ class Collector:
         from ..constants import TERMINAL_AVAILABILITY
 
         cfg = self.cfg.collection
+        # Chronological, so a posting observed more than once in a run (the
+        # uncertain-then-retried path) ends on its LAST observation rather than
+        # an arbitrary one, and last_checked_at_utc cannot move backwards.
         rows = repo.db.query(
             "SELECT o.posting_id, o.availability_state, o.observed_at_utc, "
             "p.external_job_id FROM posting_observations o "
-            "JOIN postings p ON p.posting_id = o.posting_id WHERE o.run_id = ?",
+            "JOIN postings p ON p.posting_id = o.posting_id WHERE o.run_id = ? "
+            "ORDER BY o.observed_at_utc ASC, o.observation_id ASC",
             (run_id,),
         )
         for row in rows:

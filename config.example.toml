@@ -29,7 +29,7 @@ challenge_backoff_seconds = 60.0
 max_consecutive_challenges = 4
 # Hard ceiling on live requests per run.
 max_requests_per_run = 1200
-user_agent = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)"
+user_agent = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)"
 accept_language = "en-US,en;q=0.9"
 http2 = true
 max_response_bytes = 26214400

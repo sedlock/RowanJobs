@@ -564,3 +564,78 @@ def test_every_documented_run_kind_is_accepted(collect, db: Database, run_kind: 
     assert db.scalar("SELECT run_kind FROM collection_runs WHERE run_id = ?", (result.run_id,)) == (
         run_kind
     )
+
+
+def build_churning_source(
+    discovery: dict[str, str],
+    later: dict[str, str],
+) -> FakeSource:
+    """A source whose listing membership changes after the first traversal."""
+    source = FakeSource()
+    source.add(
+        LISTING_URL,
+        html_response(listing_markup(discovery)),
+        html_response(listing_markup(later)),
+        html_response(listing_markup(later)),
+    )
+    for job_id, title in {**discovery, **later}.items():
+        source.page(job_url(job_id), build_detail_page(job_id=job_id, title=title))
+    return source
+
+
+def test_an_advertisement_a_qualified_scan_listed_is_never_recorded_absent_in_that_run(
+    collect, db: Database
+) -> None:
+    """Absence may not contradict our own evidence from minutes earlier.
+
+    Discovery lists 1001 and 1002; the source then drops 1002 and adds 1003, and
+    the reconciliation traversal agrees with the second reading. Concluding that
+    1002 was withdrawn would be a fabricated removal: a qualified traversal in
+    this very run saw it listed.
+    """
+    result = collect(
+        build_churning_source({"1001": "Kept", "1002": "Dropped"}, {"1001": "Kept", "1003": "New"})
+    )
+
+    absent = db.query(
+        "SELECT p.external_job_id FROM presence_events e "
+        "JOIN postings p ON p.posting_id = e.posting_id "
+        "WHERE e.event_kind = 'absent_qualified'"
+    )
+    assert [row["external_job_id"] for row in absent] == []
+
+    gaps = db.query(
+        "SELECT kind, detail FROM coverage_gaps WHERE kind = 'listing_disagreement_within_run'"
+    )
+    assert gaps, "the disagreement must be visible as a coverage exception"
+    assert result.counts["events"]["absent_qualified"] == 0
+
+
+def test_a_reconciliation_that_agrees_with_neither_pass_leaves_the_run_unresolved(
+    collect, db: Database
+) -> None:
+    """Qualifying is not agreeing.
+
+    A third traversal reporting a third different set has settled nothing, so
+    absence-dependent conclusions stay suppressed for the run.
+    """
+    source = FakeSource()
+    source.add(
+        LISTING_URL,
+        html_response(listing_markup({"1001": "A", "1002": "B"})),
+        html_response(listing_markup({"1001": "A", "1003": "C"})),
+        html_response(listing_markup({"1001": "A", "1004": "D"})),
+    )
+    for job_id in ("1001", "1002", "1003", "1004"):
+        source.page(job_url(job_id), build_detail_page(job_id=job_id, title=f"Job {job_id}"))
+
+    result = collect(source)
+
+    comparison = result.coverage["set_comparison"]
+    assert comparison["reconciliation_qualified"] is True
+    assert comparison["reconciliation_agrees_with"] == []
+    assert result.coverage["absence_analysis_supported"] is False
+    assert result.outcome == "partial"
+    assert (
+        db.scalar("SELECT COUNT(*) FROM presence_events WHERE event_kind = 'absent_qualified'") == 0
+    )

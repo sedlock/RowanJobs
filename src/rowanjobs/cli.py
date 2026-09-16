@@ -710,17 +710,25 @@ def cmd_diff(args: argparse.Namespace) -> int:
         # Only versions sharing one comparison contract may be compared, and the
         # contract in force is the one behind the most recently seen version --
         # not the lexically largest string, which would order 10.0.0 before 9.0.0.
+        # Only versions sharing one comparison *lineage* -- parser version,
+        # comparison contract and text contract -- may be compared. The lineage
+        # in force is the one behind the most recently seen version.
         versions = db.query(
             """
+            WITH latest AS (
+                SELECT v2.parser_version, v2.contract_version, v2.text_contract_version
+                  FROM posting_versions v2
+                  JOIN postings p2 ON p2.posting_id = v2.posting_id
+                 WHERE p2.external_job_id = ?
+                 ORDER BY v2.first_seen_at_utc DESC, v2.posting_version_id DESC
+                 LIMIT 1)
             SELECT v.* FROM posting_versions v
               JOIN postings p ON p.posting_id = v.posting_id
+              JOIN latest ON 1 = 1
              WHERE p.external_job_id = ?
-               AND v.contract_version = (
-                   SELECT v2.contract_version FROM posting_versions v2
-                     JOIN postings p2 ON p2.posting_id = v2.posting_id
-                    WHERE p2.external_job_id = ?
-                    ORDER BY v2.first_seen_at_utc DESC, v2.posting_version_id DESC
-                    LIMIT 1)
+               AND v.contract_version = latest.contract_version
+               AND v.text_contract_version = latest.text_contract_version
+               AND COALESCE(v.parser_version, '') = COALESCE(latest.parser_version, '')
              ORDER BY v.first_seen_at_utc, v.posting_version_id
             """,
             (str(args.job_id), str(args.job_id)),
@@ -786,11 +794,16 @@ def cmd_diff(args: argparse.Namespace) -> int:
                     "posting_version_id": newer["posting_version_id"],
                     "first_seen_at_utc": newer["first_seen_at_utc"],
                 },
-                "contract_version": newer["contract_version"],
+                "comparison_lineage": {
+                    "parser_version": newer["parser_version"],
+                    "contract_version": newer["contract_version"],
+                    "text_contract_version": newer["text_contract_version"],
+                },
                 "changed": changed,
                 "unified_diff": diff,
-                "note": "versions are only compared within one comparison contract; a "
-                "parser upgrade cannot appear here as a source edit",
+                "note": "versions are only compared within one comparison lineage "
+                "(parser version, comparison contract, text contract), so a parser or "
+                "contract upgrade cannot appear here as a source edit",
             },
             True,
         )
@@ -821,7 +834,7 @@ def cmd_reprocess(args: argparse.Namespace) -> int:
         if args.what in ("details", "all"):
             reports.append(
                 reprocess_details(
-                    db, job_id=args.job_id, limit=args.limit, relink=not args.no_relink
+                    db, job_id=args.job_id, limit=args.limit, relink=args.relink
                 ).as_dict()
             )
         if args.what in ("listings", "all"):
@@ -977,7 +990,10 @@ def cmd_restore(args: argparse.Namespace) -> int:
     except (OSError, FileExistsError) as exc:
         line(str(exc))
         return EXIT_USAGE
-    check = manager.restore_check(source, destination.parent)
+    # Verify in a temp directory: restore_check writes its own working copy,
+    # and dropping that next to the restore target would leave a stray database.
+    with tempfile.TemporaryDirectory(prefix="rowanjobs-restore-") as tmp:
+        check = manager.restore_check(source, Path(tmp))
     payload = {
         "restored_to": str(path),
         "source": str(source),
@@ -1199,9 +1215,11 @@ def build_parser() -> argparse.ArgumentParser:
     reprocess.add_argument("--job-id")
     reprocess.add_argument("--limit", type=int)
     reprocess.add_argument(
-        "--no-relink",
+        "--relink",
         action="store_true",
-        help="create extractions but leave observations pointing at the old ones",
+        help="ALSO rewrite each observation to point at the new extraction and "
+        "version. Off by default: it mutates evidence rows and loses the record "
+        "of which interpretation the observation was originally made under.",
     )
     reprocess.set_defaults(func=cmd_reprocess)
 

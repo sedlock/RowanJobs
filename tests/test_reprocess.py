@@ -26,12 +26,18 @@ DETAIL_URL = "https://jobs.rowan.edu/en-us/job/1001/job-1001"
 VERSION_ATTRIBUTES = (
     ("rowanjobs", "PARSER_VERSION"),
     ("rowanjobs", "CONTRACT_VERSION"),
+    ("rowanjobs", "TEXT_CONTRACT_VERSION"),
     ("rowanjobs.reprocess", "PARSER_VERSION"),
     ("rowanjobs.reprocess", "CONTRACT_VERSION"),
+    ("rowanjobs.reprocess", "TEXT_CONTRACT_VERSION"),
     ("rowanjobs.collect.repo", "PARSER_VERSION"),
     ("rowanjobs.collect.repo", "CONTRACT_VERSION"),
+    ("rowanjobs.collect.repo", "TEXT_CONTRACT_VERSION"),
+    ("rowanjobs.collect.events", "PARSER_VERSION"),
     ("rowanjobs.collect.events", "CONTRACT_VERSION"),
-    ("rowanjobs.extract.fingerprint", "CONTRACT_VERSION"),
+    ("rowanjobs.collect.events", "TEXT_CONTRACT_VERSION"),
+    # fingerprint.py reads the constants from the rowanjobs package at call
+    # time, so patching the package attributes above is enough for it.
     ("rowanjobs.extract.pageup_detail", "PARSER_VERSION"),
     ("rowanjobs.extract.pageup_listing", "PARSER_VERSION"),
 )
@@ -48,9 +54,19 @@ def archive(collect, db: Database) -> FakeSource:
     return source
 
 
-def upgrade_parser(monkeypatch: pytest.MonkeyPatch, version: str = "2.0.0") -> None:
+def upgrade_parser(
+    monkeypatch: pytest.MonkeyPatch, version: str = "2.0.0", *, only: str | None = None
+) -> None:
+    """Simulate a genuine upgrade of one or all of the version constants.
+
+    ``only`` restricts the bump to a single constant, which is how a real
+    upgrade usually happens: changing markup-to-text rules bumps
+    ``TEXT_CONTRACT_VERSION`` alone, and that must still not look like a
+    website edit.
+    """
     for module, attribute in VERSION_ATTRIBUTES:
-        monkeypatch.setattr(f"{module}.{attribute}", version)
+        if only is None or attribute == only:
+            monkeypatch.setattr(f"{module}.{attribute}", version)
 
 
 def forbid_network(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,14 +156,39 @@ def test_the_old_interpretation_is_kept_alongside_the_new_one(
     assert versions[1]["first_run_id"] is None
 
 
-def test_observations_are_relinked_to_the_current_contract(
+def test_observations_keep_their_original_interpretation_by_default(
+    archive: FakeSource, db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relinking mutates an evidence row, so it is opt-in.
+
+    An observation records what we understood at the time it was made. Rewriting
+    that pointer by default would quietly erase which interpretation produced a
+    historical reading.
+    """
+    original = db.one("SELECT * FROM posting_observations LIMIT 1")
+    upgrade_parser(monkeypatch)
+    forbid_network(monkeypatch)
+
+    report = reprocess_details(db)
+
+    assert report.observations_relinked == 0
+    assert report.versions_created == 1, "the new reading is still recorded"
+    untouched = db.one(
+        "SELECT * FROM posting_observations WHERE observation_id = ?",
+        (original["observation_id"],),
+    )
+    assert untouched["posting_version_id"] == original["posting_version_id"]
+    assert untouched["extraction_id"] == original["extraction_id"]
+
+
+def test_observations_can_be_relinked_to_the_current_contract_on_request(
     archive: FakeSource, db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = db.one("SELECT * FROM posting_observations LIMIT 1")
     upgrade_parser(monkeypatch)
     forbid_network(monkeypatch)
 
-    report = reprocess_details(db)
+    report = reprocess_details(db, relink=True)
 
     assert report.observations_relinked == 1
     relinked = db.one(
@@ -164,7 +205,7 @@ def test_observations_are_relinked_to_the_current_contract(
     assert contract == "2.0.0"
 
 
-def test_relinking_can_be_declined_so_the_old_reading_stays_current(
+def test_relinking_is_explicitly_declinable(
     archive: FakeSource, db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = db.one("SELECT * FROM posting_observations LIMIT 1")
@@ -270,3 +311,41 @@ def test_an_unreadable_payload_is_reported_rather_than_skipped_silently(
 
     assert report.versions_created == 0
     assert [f["artifact_id"] for f in report.failures] == [artifact_id]
+
+
+@pytest.mark.parametrize(
+    "constant", ["TEXT_CONTRACT_VERSION", "PARSER_VERSION", "CONTRACT_VERSION"]
+)
+def test_bumping_one_version_constant_is_never_recorded_as_a_website_edit(
+    archive: FakeSource, collect, db: Database, monkeypatch: pytest.MonkeyPatch, constant: str
+) -> None:
+    """A changed reading starts a parallel line of versions, not a content change.
+
+    The page bytes are identical across both collections; only our own
+    interpretation changed. Recording that as ``content_changed`` would put a
+    fabricated edit into the archive's history of a real advertisement.
+    """
+    before = db.scalar("SELECT COUNT(*) FROM presence_events WHERE event_kind='content_changed'")
+
+    upgrade_parser(monkeypatch, only=constant)
+    assert collect(archive).outcome == "success"
+
+    after = db.scalar("SELECT COUNT(*) FROM presence_events WHERE event_kind='content_changed'")
+    assert after == before == 0
+
+    lineages = db.query(
+        "SELECT DISTINCT parser_version, contract_version, text_contract_version "
+        "FROM posting_versions ORDER BY posting_version_id"
+    )
+    assert len(lineages) == 2, "the upgraded reading must be its own lineage"
+
+
+def test_versions_record_the_parser_that_produced_them(archive: FakeSource, db: Database) -> None:
+    rows = db.query(
+        "SELECT parser_version, contract_version, text_contract_version FROM posting_versions"
+    )
+    assert rows
+    for row in rows:
+        assert row["parser_version"], "a version with no parser cannot be scoped for comparison"
+        assert row["contract_version"]
+        assert row["text_contract_version"]

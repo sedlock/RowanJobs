@@ -564,15 +564,16 @@ class Repository:
             version_id = self.db.insert(
                 """
                 INSERT INTO posting_versions(
-                    posting_id, contract_version, text_contract_version,
+                    posting_id, parser_version, contract_version, text_contract_version,
                     content_fingerprint, description_text_fingerprint,
                     description_html_fingerprint, metadata_fingerprint, title,
                     description_html, description_html_kind, description_text,
                     first_seen_at_utc, first_extraction_id, first_run_id)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     posting_id,
+                    PARSER_VERSION,
                     CONTRACT_VERSION,
                     TEXT_CONTRACT_VERSION,
                     content_fp,

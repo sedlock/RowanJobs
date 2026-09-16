@@ -37,8 +37,8 @@ from lxml import html
 
 from .. import PARSER_VERSION
 from .dates import ParsedDate, parse_source_date
-from .slicing import find_by_id, inner_source
-from .text import html_to_text, inner_html
+from .slicing import Slice, find_by_id, inner_source
+from .text import html_string_to_text, html_to_text, inner_html
 
 PARSER_NAME = "pageup_detail"
 
@@ -194,7 +194,7 @@ def parse_detail(markup: str, base_url: str) -> DetailExtraction:
     values = _labelled_values(job_content, warnings, desc_node)
     external_job_id = _external_job_id(job_content, values, warnings)
     links = _links(desc_node, job_content, base_url)
-    closure = _closure_signal(doc, body_text)
+    closure = _closure_signal(doc, job_content, desc_node)
 
     status = "ok" if description_html is not None else "partial"
     return DetailExtraction(
@@ -388,7 +388,8 @@ def _description(
         return None, "absent", None, None
 
     sl = find_by_id(markup, "job-details", "div")
-    if sl is not None and sl.exact:
+    node_text = html_to_text(node)
+    if sl is not None and sl.exact and _slice_matches_node(markup, sl, node_text):
         description_html = inner_source(markup, sl)
         kind = "source-substring"
     else:
@@ -396,9 +397,24 @@ def _description(
         kind = "reserialized"
         warnings.append(
             "description markup was re-serialised, not sliced from the source; "
-            + (sl.reason if sl and sl.reason else "element boundaries not resolvable")
+            + (sl.reason if sl and sl.reason else "the raw slice did not match the parsed element")
         )
-    return description_html, kind, html_to_text(node), node
+    return description_html, kind, node_text, node
+
+
+def _slice_matches_node(markup: str, sl: Slice, node_text: str) -> bool:
+    """Confirm the raw slice really is the element the parser used.
+
+    ``find_by_id`` scans raw markup, so a script or comment containing
+    ``<div id="job-details">`` could match something other than the element lxml
+    resolved. Rendering the slice and comparing, ignoring whitespace, keeps the
+    ``source-substring`` label from ever being a claim we have not checked.
+    """
+    try:
+        rendered = html_string_to_text(inner_source(markup, sl))
+    except Exception:  # noqa: BLE001 - any parse trouble means "cannot confirm"
+        return False
+    return "".join(rendered.split()) == "".join(node_text.split())
 
 
 # ---------------------------------------------------------------------- links
@@ -505,20 +521,59 @@ CLOSURE_PHRASES = (
     "job not found",
     "the job you are looking for",
     "vacancy is closed",
+    "has been filled",
 )
 
 
-def _closure_signal(doc: html.HtmlElement, body_text: str) -> str | None:
+def _closure_signal(
+    doc: html.HtmlElement,
+    job_content: html.HtmlElement,
+    description_node: html.HtmlElement | None,
+) -> str | None:
+    """Detect a closed/unavailable template, without reading the advertisement.
+
+    Two traps this avoids:
+
+    * The advertisement's own prose routinely contains these phrases -- "parking
+      permits are no longer available", "the post has been filled internally
+      before" -- so the description region is excluded from the search. Matching
+      inside it would declare a live, listed advertisement closed.
+    * ``#message-list`` is a permanently present, normally empty ``<ul>`` on
+      this source. Any non-empty text there was previously treated as closure,
+      so a session notice or a cookie banner would have flipped every posting to
+      "closed" in a single run. It now has to actually say something about
+      closure.
+    """
     messages = doc.get_element_by_id("message-list", None)
     if messages is not None:
         text = html_to_text(messages).strip()
-        if text:
-            return f"message-list: {text[:400]}"
-    lowered = body_text.lower()
+        lowered = text.lower()
+        for phrase in CLOSURE_PHRASES:
+            if phrase in lowered:
+                return f"message-list: {text[:400]}"
+
+    outside = _text_outside(job_content, description_node).lower()
     for phrase in CLOSURE_PHRASES:
-        if phrase in lowered:
+        if phrase in outside:
             return f"closure phrase: {phrase!r}"
     return None
+
+
+def _text_outside(job_content: html.HtmlElement, description_node: html.HtmlElement | None) -> str:
+    """Readable text of the job container excluding the advertisement body."""
+    if description_node is None:
+        return html_to_text(job_content)
+    parts: list[str] = []
+    for child in job_content.iter():
+        if not isinstance(child.tag, str) or child is description_node:
+            continue
+        if _is_within(child, description_node):
+            continue
+        if child.text:
+            parts.append(child.text)
+        if child.tail and not _is_within(child, description_node):
+            parts.append(child.tail)
+    return " ".join(" ".join(parts).split())
 
 
 def job_id_from_url(url: str) -> str | None:

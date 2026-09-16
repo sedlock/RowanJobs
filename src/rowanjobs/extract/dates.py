@@ -130,12 +130,28 @@ def parse_source_date(
                 "display is date-only; the machine value is the source's own "
                 "placeholder time and must not be reported as a published time"
             )
+        if precision == "unknown":
+            # The page showed something we cannot read ("Ongoing", "September
+            # 2026"). The machine value may be a placeholder, so publishing a
+            # precise instant from it would invent a deadline the source never
+            # displayed.
+            return ParsedDate(
+                display_text=display,
+                machine_value=machine,
+                tz_text=tz_text,
+                parse_state="unparsed",
+                precision="unknown",
+                parsed_utc=None,
+                parsed_local_date=None,
+                detail="the displayed value matches no known date format, so the "
+                "machine value is not interpretable as a published time",
+            )
         return ParsedDate(
             display_text=display,
             machine_value=machine,
             tz_text=tz_text,
             parse_state="parsed",
-            precision=precision if precision != "unknown" else "minute",
+            precision=precision,
             parsed_utc=utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
             parsed_local_date=local.strftime("%Y-%m-%d"),
             detail=detail,

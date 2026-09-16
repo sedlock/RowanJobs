@@ -44,9 +44,11 @@ class NetworkConfig:
     max_consecutive_challenges: int = 4
     # Hard ceiling on live requests per run. Protects the source and us.
     max_requests_per_run: int = 1200
-    user_agent: str = (
-        "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)"
-    )
+    # Identifies the collector and links to the project, which is how a site
+    # operator can find out who we are and how to reach us. Deliberately no
+    # personal address: the repository is public and the project URL is the
+    # stable contact point.
+    user_agent: str = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)"
     accept_language: str = "en-US,en;q=0.9"
     http2: bool = True
     max_response_bytes: int = 25 * 1024 * 1024

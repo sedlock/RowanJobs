@@ -72,7 +72,7 @@ rather than per-module wishful thinking.
 | `challenge_backoff_seconds` | `45.0` | Base wait after an access-control challenge; the nth consecutive challenge waits `45 × 2^(n-1)`. |
 | `max_consecutive_challenges` | `4` | After this many challenges in a row the run raises `ChallengeWall` and **stops requesting** rather than hammering the source. |
 | `max_requests_per_run` | `1200` | Hard ceiling on live requests in one run. Exceeding it fails the fetch with `budget_exhausted`. Protects the source and us. |
-| `user_agent` | `RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)` | Honest, identifiable, with a contact address. Also used by the browser step, so the two transports make the same claim about who we are. |
+| `user_agent` | `RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)` | Honest and identifiable, linking to the project rather than a personal address. Also used by the browser step, so both transports make the same claim about who we are. |
 | `accept_language` | `en-US,en;q=0.9` | `Accept-Language` header. |
 | `http2` | `true` | Enable HTTP/2. |
 | `max_response_bytes` | `26214400` (25 MiB) | Ceiling for a page. A larger response is stored as an explicit `capture_state='partial'` prefix with a recorded coverage exception — never silently truncated and called complete. |
@@ -200,7 +200,7 @@ max_consecutive_challenges = 4
 max_requests_per_run = 1200
 
 # Honest and contactable. The browser step uses this same string.
-user_agent = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)"
+user_agent = "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)"
 accept_language = "en-US,en;q=0.9"
 http2 = true
 

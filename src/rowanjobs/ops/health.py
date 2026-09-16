@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +29,13 @@ from .. import (
 )
 from ..db import Database
 from ..db.migrations import SCHEMA_VERSION, current_version
-from ..timeutil import duration_str, local_str, utc_str
+from ..timeutil import (
+    OPERATIONAL_TZ,
+    duration_str,
+    local_date_str,
+    local_str,
+    utc_str,
+)
 from .atomic import write_json
 from .backup import BackupManager
 from .notify import Notifier
@@ -138,7 +145,8 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
 
     disk = shutil.disk_usage(layout.data_root)
 
-    collection_state = _collection_state(last_run, open_run, last_qualified)
+    coverage_window = _coverage_window(db, cfg)
+    collection_state = _collection_state(last_run, open_run, last_qualified, coverage_window)
     payload: dict[str, Any] = {
         "health_schema_version": HEALTH_SCHEMA_VERSION,
         "application": "rowanjobs",
@@ -189,6 +197,7 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
                 {"kind": str(g["kind"]), "count": int(g["n"]), "latest_utc": str(g["latest"])}
                 for g in gaps
             ],
+            "coverage_window": coverage_window,
         },
         "archive": {
             "state": "VERIFIED" if not failures["extraction_failed"] else "DEGRADED",
@@ -264,16 +273,75 @@ def _run_brief(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _coverage_window(db: Database, cfg: Config) -> dict[str, Any]:
+    """Which scheduled days since the first qualified scan actually have one.
+
+    Nothing else computes this, so a collector that simply stopped running would
+    otherwise keep reporting HEALTHY on the strength of its last successful run.
+    A missed day is a permanent coverage gap -- it is never backfilled -- so the
+    honest thing is to count it and say so.
+    """
+    covered = {
+        str(r["slot_local_date"])
+        for r in db.query(
+            "SELECT DISTINCT scheduled_slot_local_date AS slot_local_date "
+            "FROM v_qualified_scans WHERE scheduled_slot_local_date IS NOT NULL"
+        )
+    }
+    if not covered:
+        return {
+            "first_covered_local_date": None,
+            "last_covered_local_date": None,
+            "covered_days": 0,
+            "missed_local_dates": [],
+            "missed_days": 0,
+            "days_since_last_qualified": None,
+        }
+
+    first, last = min(covered), max(covered)
+    today = local_date_str()
+    day = date.fromisoformat(first)
+    end = date.fromisoformat(today)
+    missed: list[str] = []
+    while day <= end:
+        iso = day.isoformat()
+        # Today only counts as missed once its scheduled slot has passed.
+        if iso not in covered and (iso != today or _slot_has_passed(cfg)):
+            missed.append(iso)
+        day += timedelta(days=1)
+    return {
+        "first_covered_local_date": first,
+        "last_covered_local_date": last,
+        "covered_days": len(covered),
+        "missed_local_dates": missed[-30:],
+        "missed_days": len(missed),
+        "days_since_last_qualified": (end - date.fromisoformat(last)).days,
+        "note": "a missed day is a permanent coverage gap; a later collection "
+        "cannot reconstruct what was published on it",
+    }
+
+
+def _slot_has_passed(cfg: Config) -> bool:
+    now = datetime.now(OPERATIONAL_TZ)
+    return (now.hour, now.minute) >= (cfg.schedule.hour, cfg.schedule.minute)
+
+
 def _collection_state(
     last_run: dict[str, Any] | None,
     open_run: dict[str, Any] | None,
     last_qualified: dict[str, Any] | None,
+    coverage_window: dict[str, Any],
 ) -> str:
     if open_run is not None:
         return "RUNNING"
     if last_run is None:
         return "NEVER_RUN"
     outcome = str(last_run["outcome"] or "")
+    stale = coverage_window.get("days_since_last_qualified")
+    if stale is not None and int(stale) >= 2:
+        # Two scheduled days without a qualified discovery is a stopped
+        # collector, whatever the last run happened to return.
+        return "STALE"
     if outcome == "success" and last_qualified is not None:
         return "HEALTHY"
     if outcome in ("partial", "lock_contention"):
@@ -299,7 +367,7 @@ def exit_code_for(payload: dict[str, Any]) -> int:
     3  collection fine but protection degraded (no verified/off-host backup)
     """
     state = payload["collection"]["state"]
-    if state == "FAILED":
+    if state in ("FAILED", "STALE"):
         return 1
     if state in ("DEGRADED", "UNKNOWN"):
         return 2
