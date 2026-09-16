@@ -27,10 +27,16 @@ from ..timeutil import OPERATIONAL_TZ
 
 # "Sep 29 2026 11:55 PM", "Sep 15 2026", "29 Sep 2026"
 _DISPLAY_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (re.compile(r"^([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])$"),
-     "%b %d %Y %I:%M %p", "minute"),
-    (re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])$"),
-     "%d %b %Y %I:%M %p", "minute"),
+    (
+        re.compile(r"^([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])$"),
+        "%b %d %Y %I:%M %p",
+        "minute",
+    ),
+    (
+        re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])$"),
+        "%d %b %Y %I:%M %p",
+        "minute",
+    ),
     (re.compile(r"^([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})$"), "%b %d %Y", "date"),
     (re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$"), "%d %b %Y", "date"),
     (re.compile(r"^(\d{4})-(\d{2})-(\d{2})$"), "%Y-%m-%d", "date"),
@@ -72,7 +78,9 @@ def _parse_machine(value: str) -> datetime | None:
         return None
     y, mo, d, h, mi, s, off = match.groups()
     try:
-        dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))
+        # Deliberately naive here; the offset from the source string is attached
+        # below so a missing offset is never silently treated as UTC.
+        dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))  # noqa: DTZ001
     except ValueError:
         return None
     if off in (None, "", "Z", "z"):
@@ -135,10 +143,18 @@ def parse_source_date(
 
     if display and fmt:
         try:
-            naive = datetime.strptime(" ".join(display.split()), fmt)
+            # The display text carries no offset; the operational zone is
+            # attached explicitly on the next line.
+            naive = datetime.strptime(" ".join(display.split()), fmt)  # noqa: DTZ007
         except ValueError:
             return ParsedDate(
-                display, machine, tz_text, "invalid", precision, None, None,
+                display,
+                machine,
+                tz_text,
+                "invalid",
+                precision,
+                None,
+                None,
                 detail=f"display text did not match its own pattern {fmt!r}",
             )
         # No machine value and no timezone: interpret in the operational zone
@@ -150,9 +166,9 @@ def parse_source_date(
             tz_text=tz_text,
             parse_state="parsed",
             precision=precision,
-            parsed_utc=None if precision == "date" else local.astimezone(UTC).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
+            parsed_utc=None
+            if precision == "date"
+            else local.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             parsed_local_date=local.strftime("%Y-%m-%d"),
             detail="no machine value on the page; interpreted from display text"
             + (" as a date only" if precision == "date" else ""),
@@ -160,10 +176,22 @@ def parse_source_date(
 
     if machine:
         return ParsedDate(
-            display, machine, tz_text, "invalid", precision, None, None,
+            display,
+            machine,
+            tz_text,
+            "invalid",
+            precision,
+            None,
+            None,
             detail="machine value present but not an interpretable timestamp",
         )
     return ParsedDate(
-        display, machine, tz_text, "unparsed", precision, None, None,
+        display,
+        machine,
+        tz_text,
+        "unparsed",
+        precision,
+        None,
+        None,
         detail="no recognised date pattern",
     )

@@ -43,10 +43,7 @@ def wal_reset_bug_fixed(version: str) -> bool:
     v = _parse(version)
     if v >= (3, 51, 3):
         return True
-    for fixed in _FIXED_FROM:
-        if v[0] == fixed[0] and v[1] == fixed[1] and v[2] >= fixed[2]:
-            return True
-    return False
+    return any(v[0] == fixed[0] and v[1] == fixed[1] and v[2] >= fixed[2] for fixed in _FIXED_FROM)
 
 
 @dataclass(frozen=True, slots=True)

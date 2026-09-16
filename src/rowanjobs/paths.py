@@ -101,7 +101,7 @@ class Layout:
     def ensure(self) -> None:
         """Create the data tree with restrictive permissions."""
         self.data_root.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.data_root, 0o700)
+        self.data_root.chmod(0o700)
         for d in (
             self.backups_dir,
             self.logs_dir,
@@ -110,7 +110,7 @@ class Layout:
             self.exports_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
-            os.chmod(d, 0o700)
+            d.chmod(0o700)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

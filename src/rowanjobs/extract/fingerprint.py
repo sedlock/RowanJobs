@@ -39,9 +39,7 @@ def html_fingerprint(markup: str | None, contract: str = CONTRACT_VERSION) -> st
     return _digest("html", contract, markup or "")
 
 
-def metadata_fingerprint(
-    values: list[dict[str, Any]], contract: str = CONTRACT_VERSION
-) -> str:
+def metadata_fingerprint(values: list[dict[str, Any]], contract: str = CONTRACT_VERSION) -> str:
     """Fingerprint the labelled source fields.
 
     Order matters: the source presents Job no / Work type / Location /

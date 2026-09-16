@@ -68,10 +68,40 @@ DROP_TAGS = frozenset(
 
 BLOCK_TAGS = frozenset(
     {
-        "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "table",
-        "thead", "tbody", "tfoot", "blockquote", "section", "article", "header",
-        "footer", "aside", "form", "fieldset", "hr", "ul", "ol", "dl", "dt",
-        "dd", "pre", "figure", "figcaption", "address", "main", "nav",
+        "p",
+        "div",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "li",
+        "tr",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "blockquote",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "aside",
+        "form",
+        "fieldset",
+        "hr",
+        "ul",
+        "ol",
+        "dl",
+        "dt",
+        "dd",
+        "pre",
+        "figure",
+        "figcaption",
+        "address",
+        "main",
+        "nav",
     }
 )
 
@@ -88,7 +118,7 @@ def _collapse(value: str) -> str:
 
 
 class _Renderer:
-    __slots__ = ("out", "_pre_depth")
+    __slots__ = ("_pre_depth", "out")
 
     def __init__(self) -> None:
         self.out: list[str] = []

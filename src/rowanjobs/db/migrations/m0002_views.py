@@ -39,6 +39,16 @@ WHERE o.availability_state = 'content_captured'
   AND o.posting_id IS NOT NULL
 GROUP BY o.posting_id;
 
+-- Seen in ANY scan, qualified or not. Kept separate from v_last_listed so a
+-- reader can tell "we saw it" from "we saw it in a scan good enough to reason
+-- about absence".
+CREATE VIEW v_last_seen_any_scan AS
+SELECT le.posting_id,
+       MAX(le.observed_at_utc) AS last_seen_any_scan_at_utc
+FROM listing_entries le
+WHERE le.posting_id IS NOT NULL
+GROUP BY le.posting_id;
+
 -- The latest observation of any kind, including failures.
 CREATE VIEW v_last_observation AS
 SELECT o.posting_id,
@@ -56,6 +66,7 @@ SELECT
     p.first_discovered_at_utc,
     p.discovery_basis,
     ll.last_listed_at_utc,
+    ls.last_seen_any_scan_at_utc,
     lc.last_captured_at_utc,
     lo.last_observed_at_utc,
     latest.posting_version_id      AS current_version_id,
@@ -78,6 +89,7 @@ SELECT
         AS observation_count
 FROM postings p
 LEFT JOIN v_last_listed ll ON ll.posting_id = p.posting_id
+LEFT JOIN v_last_seen_any_scan ls ON ls.posting_id = p.posting_id
 LEFT JOIN v_last_captured lc ON lc.posting_id = p.posting_id
 LEFT JOIN v_last_observation lo ON lo.posting_id = p.posting_id
 LEFT JOIN (

@@ -47,9 +47,7 @@ class BudgetStats:
             "challenges": self.challenges,
             "sleep_seconds": round(self.sleep_seconds, 2),
             "bytes_received": self.bytes_received,
-            "wall_seconds": round(
-                (self.last_request_at or 0) - (self.first_request_at or 0), 2
-            )
+            "wall_seconds": round((self.last_request_at or 0) - (self.first_request_at or 0), 2)
             if self.first_request_at
             else 0.0,
         }
@@ -101,15 +99,14 @@ class RequestBudget:
         """Block until another live request is permitted."""
         with self._lock:
             if self.stats.requests >= self.max_requests:
-                raise BudgetExhausted(
-                    f"request budget of {self.max_requests} reached for this run"
-                )
+                raise BudgetExhausted(f"request budget of {self.max_requests} reached for this run")
             now = self._now()
             wait = self._next_allowed - now
             if wait > 0:
                 self._sleep(wait)
                 now = self._now()
-            delay = self._interval + random.uniform(0, self.jitter)
+            # Jitter only de-synchronises request timing; not security-sensitive.
+            delay = self._interval + random.uniform(0, self.jitter)  # noqa: S311
             self._next_allowed = now + delay
             self.stats.requests += 1
             if self.stats.first_request_at is None:

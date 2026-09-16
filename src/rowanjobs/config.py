@@ -42,8 +42,7 @@ class NetworkConfig:
     # Hard ceiling on live requests per run. Protects the source and us.
     max_requests_per_run: int = 1200
     user_agent: str = (
-        "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; "
-        "contact sedlock@rowan.edu)"
+        "RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs; contact sedlock@rowan.edu)"
     )
     accept_language: str = "en-US,en;q=0.9"
     http2: bool = True
@@ -193,7 +192,7 @@ def _clean(d: dict[str, Any]) -> dict[str, Any]:
 
 
 def _apply(section: Any, values: dict[str, Any], where: str) -> None:
-    known = {f for f in section.__slots__}
+    known = set(section.__slots__)
     for key, value in values.items():
         if key not in known:
             raise ValueError(f"unknown configuration key [{where}] {key!r}")
@@ -226,9 +225,9 @@ def load_config(path: Path | None = None) -> Config:
         ("backup", cfg.backup),
         ("notify", cfg.notify),
     ):
+        if name in raw and not isinstance(raw[name], dict):
+            raise ValueError(f"[{name}] must be a table")
         if name in raw:
-            if not isinstance(raw[name], dict):
-                raise ValueError(f"[{name}] must be a table")
             _apply(section, raw[name], name)
 
     unknown = set(raw) - {

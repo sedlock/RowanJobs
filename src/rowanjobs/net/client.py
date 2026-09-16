@@ -15,6 +15,7 @@ Rules enforced here:
 
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -159,6 +160,7 @@ class SourceClient:
         backoff_base: float = 2.0,
         backoff_max: float = 120.0,
         challenge_solver: Any | None = None,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.budget = budget
         self.policy = policy
@@ -176,6 +178,7 @@ class SourceClient:
             "Connection": "keep-alive",
         }
         self._client = httpx.Client(
+            transport=transport,
             http2=http2,
             follow_redirects=False,
             timeout=httpx.Timeout(
@@ -237,12 +240,10 @@ class SourceClient:
                 return result
 
             self.budget.record_retry()
-            delay = min(self.backoff_base ** attempt, self.backoff_max)
+            delay = min(self.backoff_base**attempt, self.backoff_max)
             if result.retry_after:
-                try:
+                with contextlib.suppress(ValueError):
                     delay = max(delay, float(result.retry_after))
-                except ValueError:
-                    pass
             self.budget.backoff(delay)
 
         return last  # pragma: no cover - unreachable
@@ -279,9 +280,7 @@ class SourceClient:
             return True
         if result.http_status is not None and result.http_status >= 500:
             return True
-        if result.http_status == 429:
-            return True
-        return False
+        return result.http_status == 429
 
     def _attempt(
         self,
@@ -323,7 +322,7 @@ class SourceClient:
                 if response is None:
                     return result
 
-                with response:
+                try:
                     result.http_status = response.status_code
                     result.http_version = response.http_version
                     result.response_headers = sanitize_headers(response.headers)
@@ -331,10 +330,8 @@ class SourceClient:
                     retry_after = response.headers.get("retry-after")
                     if retry_after:
                         result.retry_after = retry_after
-                        try:
+                        with contextlib.suppress(ValueError):
                             self.budget.honour_retry_after(float(retry_after))
-                        except ValueError:
-                            pass
 
                     if response.is_redirect and hop < self.max_redirects:
                         location = response.headers.get("location")
@@ -396,6 +393,8 @@ class SourceClient:
                         result.failure_kind = "http_error"
                         result.failure_detail = f"HTTP {response.status_code}"
                     return result
+                finally:
+                    response.close()
 
             result.failure_kind = "too_many_redirects"
             result.failure_detail = f"exceeded {self.max_redirects} redirects"
@@ -418,7 +417,9 @@ class SourceClient:
         except httpx.ReadTimeout as exc:
             result.failure_kind, result.failure_detail = "timeout_read", str(exc)
         except httpx.ConnectError as exc:
-            kind = "dns" if "getaddrinfo" in str(exc) or "Name or service" in str(exc) else "connect"
+            kind = (
+                "dns" if "getaddrinfo" in str(exc) or "Name or service" in str(exc) else "connect"
+            )
             result.failure_kind, result.failure_detail = kind, str(exc)
         except httpx.TooManyRedirects as exc:  # pragma: no cover - handled manually
             result.failure_kind, result.failure_detail = "too_many_redirects", str(exc)

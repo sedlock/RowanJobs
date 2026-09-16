@@ -21,8 +21,20 @@ _TAG_START = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9:-]*)")
 _RAW_TEXT_TAGS = {"script", "style", "textarea", "title"}
 VOID_TAGS = frozenset(
     {
-        "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
-        "meta", "param", "source", "track", "wbr",
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
     }
 )
 

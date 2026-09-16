@@ -14,7 +14,7 @@ Guarantees provided here:
 
 from __future__ import annotations
 
-import os
+import contextlib
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,7 +44,7 @@ def _filesystem_type(path: Path) -> str:
     while not target.exists() and target != target.parent:
         target = target.parent
     try:
-        dev = os.stat(target).st_dev
+        dev = target.stat().st_dev
     except OSError:
         return "unknown"
     best = ("", "unknown")
@@ -57,7 +57,7 @@ def _filesystem_type(path: Path) -> str:
                 mount, fstype = parts[1], parts[2]
                 mount = mount.replace("\\040", " ")
                 try:
-                    if os.stat(mount).st_dev != dev:
+                    if Path(mount).stat().st_dev != dev:
                         continue
                 except OSError:
                     continue
@@ -79,8 +79,10 @@ class Database:
         self.wal_deviation: str | None = None
         self.filesystem: str = _filesystem_type(self.path)
 
-        flags = apsw.SQLITE_OPEN_READONLY if readonly else (
-            apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE
+        flags = (
+            apsw.SQLITE_OPEN_READONLY
+            if readonly
+            else (apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE)
         )
         self.conn = apsw.Connection(str(self.path), flags=flags)
         self.conn.set_busy_timeout(busy_timeout_ms)
@@ -119,7 +121,9 @@ class Database:
 
     # ------------------------------------------------------------------ query
 
-    def query(self, sql: str, params: Sequence[Any] | Mapping[str, Any] = ()) -> list[dict[str, Any]]:
+    def query(
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any] = ()
+    ) -> list[dict[str, Any]]:
         """Run a SELECT and return a list of column-name dicts.
 
         The row trace runs while execution is still active, which is the only
@@ -168,10 +172,8 @@ class Database:
         try:
             yield self
         except BaseException:
-            try:
+            with contextlib.suppress(apsw.Error):  # pragma: no cover - dead txn
                 self.conn.execute("ROLLBACK")
-            except apsw.Error:  # pragma: no cover - rollback of a dead txn
-                pass
             raise
         else:
             self.conn.execute("COMMIT")
@@ -213,11 +215,9 @@ class Database:
         }
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(apsw.Error):  # pragma: no cover - best effort
             if not self.readonly and self.journal_mode == "wal":
                 self.checkpoint("TRUNCATE")
-        except apsw.Error:  # pragma: no cover - best effort
-            pass
         self.conn.close()
 
     def __enter__(self) -> Database:
@@ -234,10 +234,8 @@ def open_db(path: Path, *, migrate: bool = True, busy_timeout_ms: int = 15000) -
     existed = path.exists()
     db = Database(path, readonly=False, busy_timeout_ms=busy_timeout_ms)
     if not existed:
-        try:
-            os.chmod(path, 0o600)
-        except OSError:  # pragma: no cover
-            pass
+        with contextlib.suppress(OSError):  # pragma: no cover
+            path.chmod(0o600)
     if migrate:
         from .migrations import apply_migrations
 

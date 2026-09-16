@@ -166,20 +166,13 @@ def parse_listing(markup: str, base_url: str) -> ListingExtraction:
 
     structure_recognized = "search-results" in sections_found
     if not structure_recognized:
-        warnings.append(
-            "listing structure not recognised: no <tbody id='search-results-content'>"
-        )
+        warnings.append("listing structure not recognised: no <tbody id='search-results-content'>")
 
     # A zero-row page only counts as an empty result when the surrounding
     # structure is intact. An error page that happens to yield no rows must not
     # be mistaken for "there are no jobs".
-    heading_ok = any(
-        (el.text or "").strip().lower() == "search results" for el in doc.iter("h2")
-    )
-    headers = [
-        (th.text or "").strip().lower()
-        for th in doc.iter("th")
-    ]
+    heading_ok = any((el.text or "").strip().lower() == "search results" for el in doc.iter("h2"))
+    headers = [(th.text or "").strip().lower() for th in doc.iter("th")]
     columns_ok = {"position", "location", "closes"}.issubset(set(headers))
     empty_validated = bool(
         structure_recognized
@@ -218,7 +211,7 @@ def _parse_section(
 ) -> list[ListingEntry]:
     entries: list[ListingEntry] = []
     position = 0
-    rows = [row for row in body.iter("tr")]
+    rows = list(body.iter("tr"))
     index = 0
     while index < len(rows):
         row = rows[index]
@@ -313,9 +306,7 @@ def _row_metadata(row: html.HtmlElement) -> dict[str, Any]:
         for cls in classes:
             if cls in {"location", "close-date"}:
                 continue
-            meta.setdefault("unknown_spans", []).append(
-                {"class": cls, "text": _text(span)}
-            )
+            meta.setdefault("unknown_spans", []).append({"class": cls, "text": _text(span)})
     return meta
 
 

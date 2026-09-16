@@ -166,9 +166,11 @@ def parse_detail(markup: str, base_url: str) -> DetailExtraction:
     if job_content is None:
         return _failed("no <div id='job-content'>: not a recognised detail page")
 
-    hidden = "display:none" in (job_wrapper.get("style") or "").replace(" ", "").lower() if (
-        job_wrapper is not None
-    ) else False
+    hidden = (
+        "display:none" in (job_wrapper.get("style") or "").replace(" ", "").lower()
+        if (job_wrapper is not None)
+        else False
+    )
     body_text = html_to_text(job_content).strip()
     if hidden or not body_text:
         return DetailExtraction(
@@ -440,7 +442,17 @@ def _links(
 
 
 DOCUMENT_SUFFIXES = (
-    ".pdf", ".doc", ".docx", ".rtf", ".odt", ".xls", ".xlsx", ".csv", ".txt", ".ppt", ".pptx",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
+    ".odt",
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".txt",
+    ".ppt",
+    ".pptx",
 )
 
 

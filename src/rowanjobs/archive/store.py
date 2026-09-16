@@ -158,9 +158,7 @@ class ArchiveStore:
         return data
 
     def verify(self, artifact_id: int) -> tuple[bool, str]:
-        row = self.db.one(
-            "SELECT sha256 FROM artifacts WHERE artifact_id = ?", (artifact_id,)
-        )
+        row = self.db.one("SELECT sha256 FROM artifacts WHERE artifact_id = ?", (artifact_id,))
         if row is None:
             return False, "missing"
         try:
