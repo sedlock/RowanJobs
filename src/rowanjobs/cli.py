@@ -372,10 +372,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     c = payload["collection"]
     line(f"RowanJobs {payload['app_version']}   {payload['generated_at_local']}")
     line(f"collection      : {c['state']}")
-    last = c["last_attempt"]
-    if last:
+    for label, key in (
+        ("last attempt", "last_attempt"),
+        ("last scheduled", "last_scheduled_attempt"),
+    ):
+        last = c.get(key)
+        # Only show the scheduled line when it differs; collection health is
+        # judged on it, so a manual run must not hide a failing timer.
+        if not last or (key == "last_scheduled_attempt" and last == c["last_attempt"]):
+            continue
         line(
-            f"  last attempt  : run {last['run_id']} {last['run_kind']}"
+            f"  {label:<13}: run {last['run_id']} {last['run_kind']}"
             f" -> {last['outcome']} at {last['ended_at_local'] or 'in progress'}"
             f" ({last['duration'] or '-'})"
         )

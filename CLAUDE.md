@@ -20,7 +20,11 @@ archive that lies about history.
    ingestion**. Do not add `UPDATE` or `DELETE` statements against them in the
    collection path. If an interpretation was wrong, add a new row under a new
    version — the old row stays. (`src/rowanjobs/db/migrations/m0001_initial.py`
-   module docstring; `src/rowanjobs/collect/repo.py`.)
+   module docstring; `src/rowanjobs/collect/repo.py`.) The one deliberate
+   exception lives outside ingestion and is **off by default**: `rowanjobs
+   reprocess --relink` rewrites `posting_observations.extraction_id` and
+   `posting_version_id` (`src/rowanjobs/reprocess.py`). Do not make it the
+   default, and do not add a second such path.
 
 2. **Never treat a failed, partial, challenged or unqualified collection as
    evidence that an advertisement disappeared.**
@@ -53,11 +57,19 @@ archive that lies about history.
    Extractions are keyed by
    `(artifact, parser_name, parser_version, contract_version, text_contract_version)`;
    a parser upgrade produces new rows and never rewrites old ones. Content
-   versions are only ever compared **within one `contract_version`**
-   (`src/rowanjobs/collect/events.py::_record_content_events`,
-   `src/rowanjobs/extract/fingerprint.py`). If you change parsing behaviour,
-   bump the appropriate version (below) — do not silently improve a parser in
-   place.
+   versions are only ever compared **within one comparison lineage** — the
+   triple `(parser_version, contract_version, text_contract_version)`
+   (`src/rowanjobs/extract/fingerprint.py::comparison_lineage`, which is folded
+   into `content_fingerprint`; `posting_versions.parser_version` added by
+   `m0003_comparison_lineage`; the lineage filter in
+   `src/rowanjobs/collect/events.py::_record_content_events`; and the lineage
+   scoping in `cmd_diff`). Scoping by `contract_version` alone was not enough:
+   a `TEXT_CONTRACT_VERSION` bump changed the fingerprint *inside* the same
+   comparison scope, and the next collection recorded a `content_changed` event
+   for a page nobody had edited. Bumping any one of the three now starts a
+   parallel line of versions that the old line cannot be compared against. If
+   you change parsing behaviour, bump the appropriate version (below) — do not
+   silently improve a parser in place.
 
 6. **Never report previously stored content as freshly retrieved.**
    `v_posting_current.content_freshness` is the contract: `checked` means the
@@ -65,7 +77,11 @@ archive that lies about history.
    `carried-forward` means the content is older than the last check;
    `carried-forward-uncertain` means the last check was a challenge or a
    retrieval failure; `never-captured` means no content was ever captured
-   (`src/rowanjobs/db/migrations/m0002_views.py`). Any report, export or UI must
+   (`src/rowanjobs/db/migrations/m0002_views.py`). `never-captured` is tested
+   **first**, because "carried forward" presupposes there is something to carry;
+   and the subquery that supplies the content requires `identity_state =
+   'match'`, so this view cannot call content freshly checked that
+   `v_last_captured` says was never captured. Any report, export or UI must
    carry that distinction through. Exports already do
    (`src/rowanjobs/export.py`).
 
@@ -108,7 +124,8 @@ src/rowanjobs/
                         fingerprints, PageUp listing/detail adapters, date handling
     collect/            runner (the workflow), scanner, details, qualify, events,
                         repo (persistence), lock
-    ops/                backup, health, doctor, schedule, notify, atomic writes
+    ops/                backup, health, doctor, diagnostics, schedule, notify,
+                        atomic writes
 tests/                  conftest.py, test_*.py, and fixtures/pageup/
                         (trimmed real captures the tests parse)
 ops/systemd/            unit templates (__VENV__/__CONFIG__/__DATA_ROOT__),
@@ -152,10 +169,12 @@ uv run rowanjobs --data-root /tmp/rowanjobs-scratch collect \
   jitter, a per-run ceiling, and progressive slowdown after a challenge. Do not
   add an HTTP call that bypasses `SourceClient`.
 - Reporting commands (`status`, `runs`, `show`, `history`, `diff`, `verify`,
-  `export`, `restore`) open the database **read-only** and cannot migrate or
-  mutate it (`src/rowanjobs/db/connection.py::open_readonly`).
+  `export`, `diagnostics`, `restore`) open the database **read-only** and cannot
+  migrate or mutate it (`src/rowanjobs/db/connection.py::open_readonly`).
 - `reprocess` touches no network at all; it re-parses archived payloads and
-  keeps the original observation timestamps.
+  keeps the original observation timestamps. By default it only *adds*
+  extractions and versions: `--relink` is opt-in, and it is the one flag in the
+  project that rewrites an evidence row (see "Never" rule 1).
 
 ## The versioned contracts
 
@@ -164,9 +183,9 @@ govern, so old data keeps its old meaning and a change never rewrites history.
 
 | Constant | Governs | Bump when | Effect of bumping |
 |---|---|---|---|
-| `PARSER_VERSION` | What an adapter extracts from a page (`extract/pageup_listing.py`, `extract/pageup_detail.py`) | Any change to what is recognised, captured, labelled or classified — new field, new closure phrase, changed link classification | New `extractions` rows appear for the same artifact; old extraction rows and their interpretation stay |
-| `CONTRACT_VERSION` | What counts as "different content" — the comparison contract (`extract/fingerprint.py`) | The definition of a content change moves: fields entering or leaving the fingerprint, changed canonicalisation of metadata | A parallel line of `posting_versions` begins; versions across contract versions are never compared, so nothing looks like a source edit |
-| `TEXT_CONTRACT_VERSION` | Markup → plain text rules (`extract/text.py`, `docs/EXTRACTION_CONTRACT.md`) | Any change to dropped tags, block boundaries, `<br>`, list, table, entity or whitespace handling | New extractions and new text fingerprints; the previous rendering of every archived page remains reproducible |
+| `PARSER_VERSION` | What an adapter extracts from a page (`extract/pageup_listing.py`, `extract/pageup_detail.py`) | Any change to what is recognised, captured, labelled or classified — a new field, a new closure phrase, or a change to **link classification**, because that decides what the collector retrieves (widening job documents from the career site to Rowan's own domain is why the constant is at `1.1.0`) | New `extractions` rows appear for the same artifact; old extraction rows and their interpretation stay. Since migration 3 it is also part of the comparison lineage recorded on `posting_versions.parser_version`, so the new reading starts a parallel line of versions |
+| `CONTRACT_VERSION` | What counts as "different content" — the comparison contract (`extract/fingerprint.py`) | The definition of a content change moves: fields entering or leaving the fingerprint, changed canonicalisation of metadata | A parallel line of `posting_versions` begins; versions in different comparison lineages are never compared, so nothing looks like a source edit |
+| `TEXT_CONTRACT_VERSION` | Markup → plain text rules (`extract/text.py`, `docs/EXTRACTION_CONTRACT.md`) | Any change to dropped tags, block boundaries, `<br>`, list, table, entity or whitespace handling | New extractions and new text fingerprints, and — since it is part of the comparison lineage — a parallel line of versions rather than an apparent edit; the previous rendering of every archived page remains reproducible |
 | `QUALIFICATION_RULES_VERSION` | Whether a listing scan may support an absence claim (`collect/qualify.py`) | Adding, removing or altering a qualification check | A new `listing_scan_assessments` row per scan under the new rules; the old assessment stays, so you can see both verdicts |
 | `EVENT_RULES_VERSION` | Derived presence and change events (`collect/events.py`) | Changing when `first_observed`, `listed`, `absent_qualified`, `reappeared`, `content_changed` or `coverage_gap` is emitted | `presence_events` gains a parallel rules-version line; the table is rebuildable from evidence, so old events are never edited |
 
@@ -184,7 +203,17 @@ assume it is and bump.
 Add a new numbered module under `src/rowanjobs/db/migrations/` and append it to
 `MIGRATIONS`. Never edit an applied migration. Every enumeration used in a
 `CHECK` constraint must also exist in `src/rowanjobs/constants.py`, so the SQL
-and the Python call sites cannot drift apart.
+and the Python call sites cannot drift apart — and where SQLite cannot add a
+constraint to an existing table, a trigger mirroring the same tuple is the
+substitute (`m0004_availability_guard` does this for `availability_state`).
+
+A migration that rebuilds a table other rows reference declares
+`REQUIRES_FK_OFF = True` at module level. `apply_migrations` then toggles
+`PRAGMA foreign_keys` around it — SQLite only honours that pragma outside a
+transaction — restores enforcement in a `finally`, and runs `foreign_key_check`
+afterwards, failing the migration if the rebuild left a dangling reference
+(`src/rowanjobs/db/migrations/__init__.py`; `m0005_resource_links_per_extraction`
+is the first user).
 
 ## Style
 

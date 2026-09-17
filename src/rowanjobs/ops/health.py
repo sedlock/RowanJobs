@@ -57,6 +57,15 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
         db,
         "SELECT * FROM v_run_health ORDER BY started_at_utc DESC, run_id DESC LIMIT 1",
     )
+    # Collection health is about the *scheduled* collection. A manual or
+    # verification run is an operator action: a deliberately bounded one should
+    # not make the system look degraded, and a lucky manual success must not
+    # paper over a failing timer.
+    last_scheduled = _row(
+        db,
+        "SELECT * FROM v_run_health WHERE run_kind IN ('daily','retry') "
+        "ORDER BY started_at_utc DESC, run_id DESC LIMIT 1",
+    )
     last_success = _row(
         db,
         "SELECT * FROM v_run_health WHERE outcome IN ('success','partial') "
@@ -146,7 +155,9 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
     disk = shutil.disk_usage(layout.data_root)
 
     coverage_window = _coverage_window(db, cfg)
-    collection_state = _collection_state(last_run, open_run, last_qualified, coverage_window)
+    collection_state = _collection_state(
+        last_scheduled or last_run, open_run, last_qualified, coverage_window
+    )
     payload: dict[str, Any] = {
         "health_schema_version": HEALTH_SCHEMA_VERSION,
         "application": "rowanjobs",
@@ -166,6 +177,7 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
         "collection": {
             "state": collection_state,
             "last_attempt": _run_brief(last_run),
+            "last_scheduled_attempt": _run_brief(last_scheduled),
             "last_completed": _run_brief(last_success),
             "last_qualified_discovery": {
                 "scan_id": int(last_qualified["scan_id"]),

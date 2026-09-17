@@ -118,7 +118,7 @@ killed; run 2 marked it `aborted` and preserved its evidence.
 
 ## 4. Verification results
 
-* **Tests:** 398 fixture-based tests, all passing; 88% statement coverage. Lint
+* **Tests:** 400 fixture-based tests, all passing; 88% statement coverage. Lint
   (`ruff check`), formatting and `mypy` all clean.
 * **Repeat collection:** run 3 re-observed all 133 advertisements. Every posting
   has two observations sharing one content version — no false edits.

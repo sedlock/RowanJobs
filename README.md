@@ -27,7 +27,7 @@ built on the data.
 | Detail page for every advertisement | Full HTML body, archived before parsing |
 | The advertisement title, body text and body markup | Verbatim; see `docs/EXTRACTION_CONTRACT.md` |
 | Labelled source fields (Job no, Work type, Location, Categories, Advertised, Applications close, and any label the adapter has not seen before) | Source value kept as published; normalisations stored separately |
-| Job-specific documents linked from the description body and hosted on `jobs.rowan.edu` | Classified in `src/rowanjobs/extract/pageup_detail.py::classify_link` |
+| Job-specific documents linked from an advertisement and hosted on Rowan's own domain (`rowan.edu` or any `*.rowan.edu` host) | Classified in `src/rowanjobs/extract/pageup_detail.py::classify_link`. A document on a third-party host is still classified `job_document` and recorded, but with `collection_decision='exclude'` and the reason stored |
 | Every retrieval attempt, including the failures | HTTP status, headers (credentials redacted), timings, redirect chain |
 
 It deliberately does **not** collect: application workflows or anything under
@@ -67,7 +67,7 @@ both work (`src/rowanjobs/cli.py::build_parser`).
 
 | Command | What it does |
 |---|---|
-| `doctor` | Checks host, SQLite runtime and WAL safety, data root, permissions, disk, schema, journal mode, backups, timer, lingering, browser availability, notifications (`src/rowanjobs/ops/doctor.py`) |
+| `doctor` | Checks host, SQLite runtime and WAL safety, data root, permissions, disk, schema, journal mode, backups, timer, lingering, browser availability, notifications (`src/rowanjobs/ops/doctor.py`). A configuration the loader rejects is reported as a failed `configuration` check (exit 5), not a crash |
 | `migrate` | Applies outstanding schema migrations (`src/rowanjobs/db/migrations/`) |
 | `collect` | Runs one collection. `--kind daily\|retry\|manual\|verification`, `--max-details`, `--no-verification`, `--no-backup` |
 | `retry` | Bounded same-day retry of an incomplete scheduled collection; keeps the parent's scheduled slot |
@@ -75,12 +75,13 @@ both work (`src/rowanjobs/cli.py::build_parser`).
 | `runs` | Recent runs from `v_run_health`; `--limit` |
 | `show JOB_ID` | One advertisement: freshness, source fields, URLs, links, description; `--full` |
 | `history JOB_ID` | Observation history, derived events and absence evidence; `--limit` |
-| `diff JOB_ID` | Unified diff between two archived content versions of the same posting |
-| `reprocess [details\|listings\|all]` | Re-parses **archived payloads only**; makes no network requests |
-| `backup` | Creates a verified snapshot; `--kind daily\|weekly\|monthly\|manual\|predeploy` |
+| `diff JOB_ID` | Unified diff between two archived content versions of the same posting, scoped to one comparison lineage (parser version, comparison contract, text contract) and reporting it as `comparison_lineage` |
+| `reprocess [details\|listings\|all]` | Re-parses **archived payloads only**; makes no network requests. Adds extractions and versions; `--relink` (opt-in) additionally rewrites each observation's `extraction_id`/`posting_version_id` |
+| `backup` | Creates and verifies a snapshot; `--kind daily\|weekly\|monthly\|manual\|predeploy`. With `verify_after_backup = false` the snapshot is reported `UNVERIFIED` and does not count as protection |
 | `verify` | `integrity_check`, `foreign_key_check`, payload hashes; `--restore` also restores the latest snapshot to a temporary directory |
 | `restore DESTINATION` | Restores a snapshot to a new location; refuses to overwrite the live archive |
 | `export DATASET` | `postings`, `current`, `history`, `versions`, `observations`, `runs`, `links`; `--format json\|csv`, `--output`, `--job-id`, `--limit` |
+| `diagnostics` | Writes a sanitised diagnostic bundle — coverage evidence, counts, fingerprints and failure detail, with payloads, descriptions and headers excluded; `--output` (`src/rowanjobs/ops/diagnostics.py`) |
 | `record-deployment` | Writes the runtime deployment manifest and a `deployments` row |
 
 Exit codes: `0` success, `1` failed, `2` degraded, `3` protection degraded,
@@ -113,8 +114,11 @@ retry windows (09:15 and 13:15 local) that only act if the day's slot is still
 unresolved. Units are in `ops/systemd/` (`rowanjobs.service`, `rowanjobs.timer`,
 `rowanjobs-retry.service`, `rowanjobs-retry.timer`) as templates carrying
 `__VENV__`, `__CONFIG__` and `__DATA_ROOT__` placeholders. `ops/install.sh`
-substitutes them with absolute resolved paths, installs the units, enables the
+syncs the locked environment, applies the schema migrations, substitutes the
+placeholders with absolute resolved paths, installs the units, enables the
 timers and records a deployment manifest; it is idempotent and safe to re-run.
+Nothing has to be substituted by hand. `ops/uninstall.sh` removes the units and
+leaves the archive alone.
 A missed day stays a coverage gap — a later run cannot reconstruct it. See
 `docs/OPERATIONS.md`.
 

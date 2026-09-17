@@ -231,3 +231,43 @@ def test_an_open_run_is_reported_as_running(cfg: Config, db: Database, repo) -> 
     assert payload["collection"]["state"] == "RUNNING"
     assert payload["collection"]["run_in_progress"] is not None
     assert exit_code_for(payload) == 3  # running, but still no verified backup
+
+
+def test_collection_health_is_judged_on_the_scheduled_run_not_a_manual_one(
+    cfg: Config, db: Database, collect
+) -> None:
+    """A bounded manual run must not make a working timer look degraded.
+
+    Health answers "is the daily collection working?". An operator running a
+    capped verification pass has not broken anything.
+    """
+    from .test_runner import make_source
+
+    source = make_source({"1001": "A", "1002": "B"})
+    assert collect(source, run_kind="daily").outcome == "success"
+    manual = collect(source, run_kind="verification", max_details=1, skip_verification=True)
+    assert manual.outcome == "partial"
+
+    payload = build_health(cfg, db, include_timer=False)
+
+    assert payload["collection"]["state"] == "HEALTHY"
+    assert payload["collection"]["last_attempt"]["run_kind"] == "verification"
+    assert payload["collection"]["last_scheduled_attempt"]["run_kind"] == "daily"
+    assert exit_code_for(payload) in (0, 3)
+
+
+def test_a_failing_scheduled_run_is_not_masked_by_a_manual_success(
+    cfg: Config, db: Database, collect
+) -> None:
+    """The reverse must hold too, or health would be trivially gameable."""
+    from .conftest import LISTING_URL, FakeSource, error_response
+    from .test_runner import make_source
+
+    broken = FakeSource()
+    broken.add(LISTING_URL, error_response(500), error_response(500))
+    assert collect(broken, run_kind="daily").outcome in ("partial", "failed")
+
+    collect(make_source({"1001": "A"}), run_kind="manual")
+
+    payload = build_health(cfg, db, include_timer=False)
+    assert payload["collection"]["state"] in ("DEGRADED", "FAILED", "STALE")

@@ -30,16 +30,16 @@ Two structural ideas carry most of the weight:
 | `src/rowanjobs/timeutil.py` | UTC second-precision storage, America/New_York display, `slot_for()` |
 | `src/rowanjobs/db/runtime.py` | Inspects the SQLite build actually loaded and decides whether WAL is safe |
 | `src/rowanjobs/db/connection.py` | Per-connection pragmas, journal selection, `write()` transactions, read-only handles |
-| `src/rowanjobs/db/migrations/` | Ordered, explicit migrations; `m0001_initial` (evidence model), `m0002_views` (projections) |
-| `src/rowanjobs/archive/store.py` | Content-addressed payload storage inside the database, zlib-compressed, SHA-256 of the *uncompressed* bytes |
-| `src/rowanjobs/net/guard.py` | `UrlPolicy`: scheme/host allowlist, address validation, SSRF refusal |
+| `src/rowanjobs/db/migrations/` | Ordered, explicit migrations: `m0001_initial` (evidence model), `m0002_views` (projections), `m0003_comparison_lineage` (`posting_versions.parser_version`), `m0004_availability_guard` (trigger constraining `availability_state`), `m0005_resource_links_per_extraction` (rebuild, declares `REQUIRES_FK_OFF`) |
+| `src/rowanjobs/archive/store.py` | Content-addressed payload storage inside the database, zlib-compressed, SHA-256 of the *uncompressed* bytes; `get()` re-hashes what it read before returning it |
+| `src/rowanjobs/net/guard.py` | `UrlPolicy`: scheme/host allowlist (optionally matching subdomains), address validation, SSRF refusal |
 | `src/rowanjobs/net/budget.py` | The single `RequestBudget` every live request passes through; challenge back-off |
 | `src/rowanjobs/net/client.py` | `SourceClient`: manual redirect handling, capped reads, access-control classification, header redaction |
 | `src/rowanjobs/net/browser.py` | Optional `ChallengeSolver`: an ordinary Chromium visit to satisfy a WAF challenge |
 | `src/rowanjobs/extract/decode.py` | Bytes → text with the decoding outcome recorded, never silently replaced |
 | `src/rowanjobs/extract/text.py` | The verbatim markup → text contract (`docs/EXTRACTION_CONTRACT.md`) |
 | `src/rowanjobs/extract/slicing.py` | Byte-exact extraction of an element's inner markup from the source document |
-| `src/rowanjobs/extract/fingerprint.py` | The four content fingerprints and the comparison contract |
+| `src/rowanjobs/extract/fingerprint.py` | The four content fingerprints and the comparison lineage (`comparison_lineage`: parser version, comparison contract, text contract) |
 | `src/rowanjobs/extract/dates.py` | Source dates preserved four ways; precision never over-committed |
 | `src/rowanjobs/extract/pageup_listing.py` | Listing adapter: sections, rows, `more-link`, empty-result validation, page signature |
 | `src/rowanjobs/extract/pageup_detail.py` | Detail adapter: title, labelled fields, description, links, closure signal |
@@ -52,7 +52,8 @@ Two structural ideas carry most of the weight:
 | `src/rowanjobs/collect/runner.py` | The daily workflow, outcome classification, recheck policy |
 | `src/rowanjobs/ops/backup.py` | Online-backup snapshots, verification, rotation, restore checks |
 | `src/rowanjobs/ops/health.py` | The versioned health contract behind `status --json` and `runtime/health.json` |
-| `src/rowanjobs/ops/doctor.py` | Pre-flight diagnosis and the deployment manifest |
+| `src/rowanjobs/ops/doctor.py` | Pre-flight diagnosis and the deployment manifest; a rejected configuration is reported as a failed check rather than a crash |
+| `src/rowanjobs/ops/diagnostics.py` | The sanitised diagnostic bundle behind `rowanjobs diagnostics` |
 | `src/rowanjobs/ops/schedule.py` | systemd timer inspection; reports what systemd says, not what the unit intends |
 | `src/rowanjobs/ops/notify.py` | Optional command-based alerting; `UNCONFIGURED` rather than invented delivery |
 | `src/rowanjobs/ops/atomic.py` | Write-temp / fsync / rename / fsync-dir for `health.json` and manifests |
@@ -72,8 +73,15 @@ as section comments. A short step 0 precedes them.
    load, rather than spending source requests being refused. It is entirely
    optional: with no solver available it is a no-op, an
    `access_priming_unavailable` entry is added to the run's errors, and the run
-   continues, backing off when challenged. The outcome is recorded in
-   `coverage.access_priming`.
+   continues, backing off when challenged. The result carries a `required`
+   flag, and only a *failure* adds that error entry: a page that loaded normally
+   and was issued no token at all is reported `{"primed": false, "required":
+   false}` and is not an error, because nothing was withheld
+   (`net/client.py::prime`, `net/browser.py`). The browser page load itself goes
+   through `UrlPolicy.check` and `budget.acquire()` like any other live request
+   (`SourceClient._solve`), so it is inside the one-budget and
+   destination-policy guarantees rather than beside them. The outcome is
+   recorded in `coverage.access_priming`.
 
 1. **Complete discovery traversal, queueing detail retrievals.**
    `ListingScanner.scan(scan_ordinal=1, scan_role="discovery")` walks the
@@ -94,9 +102,18 @@ as section comments. A short step 0 precedes them.
    `DetailCollector.collect`, which fetches, archives, decodes, parses, checks
    the displayed job number against the expected one, records a
    `posting_observation`, and — when content was captured — ensures a
-   `posting_version` and fetches any `collection_decision='fetch'` resource
-   links. A resource downloaded once in a run is reused for other parents via
+   `posting_version`, records this extraction's classified links
+   (`Repository.record_resource_links`, on **every** content capture, not only
+   when a version is created), and fetches the ones this extraction decided to
+   `fetch`. A resource downloaded once in a run is reused for other parents via
    `resource_associations`, so its true retrieval time is not duplicated.
+
+   A page carrying a closure notice **and** a complete advertisement body is a
+   contradiction, not a closure: the content is captured and a
+   `closure_signal_with_content` conflict is recorded unresolved
+   (`collect/details.py`). Discarding the description to call it closed would
+   assert something the page did not say. Only a page with no advertisement body
+   becomes `explicit_closure` (when a closure template said so) or `not_found`.
 
 4. **Second complete listing traversal.**
    `scan(scan_ordinal=2, scan_role="verification")`, unless
@@ -109,18 +126,35 @@ as section comments. A short step 0 precedes them.
    (`_collect_late_arrivals`).
 
 6. **One bounded reconciliation traversal if they disagree.**
-   `scan(scan_ordinal=3, scan_role="reconciliation")`. If the sets still do not
-   reconcile — or the reconciliation scan itself does not qualify — the run
-   records a `listing_set_unreconciled` coverage gap and **suppresses all
-   absence-dependent conclusions for the run**. Every positive observation is
-   kept.
+   `scan(scan_ordinal=3, scan_role="reconciliation")`. A third traversal settles
+   the disagreement only if it both **qualifies** and **agrees** with one of the
+   first two: `set_comparison["reconciliation_agrees_with"]` records which of
+   `discovery` / `verification` it matched, and the run is considered reconciled
+   only when that list is non-empty. A qualified third traversal reporting a
+   third different set has settled nothing. If the sets still do not
+   reconcile — or the reconciliation scan does not qualify, or qualifies but
+   agrees with neither — the run records a `listing_set_unreconciled` coverage
+   gap and **suppresses all absence-dependent conclusions for the run**. Every
+   positive observation is kept.
 
 Afterwards the run selects the **last qualified** traversal as the authoritative
 listing set (`_final_qualified`), derives presence and content events
 (`EventDeriver.derive_for_run`), updates the recheck policy, and classifies its
 own outcome (`_outcome`): `failed` if discovery could not be completed,
 `partial` if nothing qualified or if any coverage exception occurred, otherwise
-`success`.
+`success`. Queued detail retrievals still `pending` or `in_progress` when the
+run ends are themselves a coverage exception, so a bounded pass (`--max-details`)
+or an interrupted one reports **`partial`**, never `success`: it did not cover
+what it discovered.
+
+**An absence claim may not contradict this run's own evidence.** The runner
+collects every identifier listed by *any* qualified traversal in the run and
+passes it to the event deriver as `listed_in_any_qualified_scan`. If the final
+traversal omits an advertisement that an earlier qualified traversal listed
+minutes before, no `absent_qualified` event is emitted; a
+`listing_disagreement_within_run` coverage gap is recorded instead
+(`collect/events.py::derive_for_run`). Within one run the honest reading is "it
+was there when we looked", not "it was gone by the last look".
 
 Two matching traversals are *consistency evidence*, not proof that the source
 held still. The run records that caveat verbatim in `coverage_json`.
@@ -134,6 +168,14 @@ tier; reappearing in a qualified scan resets it to daily immediately.
 **Uncertain** outcomes never advance the demotion streak
 (`runner.py::_update_recheck_policy`).
 
+Two ordering details matter. `_queue_historical` selects unlisted postings
+**least-recently-checked first** (`ORDER BY COALESCE(r.last_checked_at_utc, '')`):
+posting-id order would recheck the same first `max_historical_rechecks_per_run`
+advertisements every run and never reach the tail. And
+`_update_recheck_policy` walks the run's observations **chronologically**, so a
+posting observed more than once in a run ends on its last observation and
+`last_checked_at_utc` cannot move backwards.
+
 ---
 
 ## Evidence tables vs. derived projections
@@ -145,6 +187,14 @@ tier; reappearing in a qualified scan resets it to daily immediately.
 `resource_observations`, `resource_associations`, `postings`, `posting_urls`
 (the last two carry `last_seen`/`seen_count` counters that advance, but rows are
 never removed or re-identified).
+
+`resource_links` is scoped to the **extraction** that read the links, not to the
+content version: unique on `(extraction_id, url_raw, position)` since migration 5,
+and written on every content capture. A link's classification belongs to the
+reading that produced it, so widening the collection scope becomes visible
+immediately instead of waiting for the advertisement's content to change.
+Extractions are deduplicated by `(artifact, parser, contracts)`, so an unchanged
+page re-observed tomorrow reuses the same extraction and adds no rows.
 
 **Derived — rebuildable from evidence, always stamped with a rules version:**
 `presence_events`, `coverage_gaps`, and every `v_*` view in
