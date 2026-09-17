@@ -1,28 +1,24 @@
 # Acceptance report
 
-**Status: skeleton. Measured values are not yet available.**
-
-Every number, count, timing and test result below is marked
-`TBD — filled in after the first production harvest`. Nothing in this document
-may be filled in from expectation, estimate or analogy: a value goes in only when
-it has been measured on this host, against this archive, and the command that
-produced it is recorded beside it.
+Every value below was measured on `entropy` against the live archive. Where a
+number could not be measured it says so; nothing here is an estimate.
 
 | Field | Value |
 |---|---|
-| Report date | TBD — filled in after the first production harvest |
-| Application version | `1.0.0` (`src/rowanjobs/__init__.py`) |
-| Git revision | TBD — filled in after the first production harvest |
-| Host | `entropy` (Ubuntu 24.04.4, kernel 7.0.0-31) — per `EXECUTION_STATE.md` |
+| Report date | 2026-09-16 (Eastern) |
+| Application version | `1.0.0`, parser `1.1.0` (`src/rowanjobs/__init__.py`) |
+| Git revision at first harvest | `d3679f3` (recorded in `runtime/deployment.json`) |
+| Git revision at report | `4c83f40` |
+| Host / user | `entropy` (Ubuntu 24.04.4), `sedlock` |
 | Data root | `~/.local/share/rowanjobs/` |
-| Reported by | TBD — filled in after the first production harvest |
+| Database | `~/.local/share/rowanjobs/rowanjobs.db`, schema v5 |
 
 ## Status vocabulary
 
 | Status | Meaning |
 |---|---|
 | `VERIFIED` | Demonstrated on this host, with the evidence recorded below |
-| `IMPLEMENTED_BUT_UNVERIFIED` | The code exists and is reviewed, but the behaviour has not been demonstrated end to end |
+| `IMPLEMENTED_BUT_UNVERIFIED` | Code exists and is tested, but the behaviour has not been demonstrated end to end on this host |
 | `BLOCKED_EXTERNAL` | Cannot be completed because of something outside this project's control |
 | `FAILED` | Attempted and did not work |
 
@@ -34,165 +30,118 @@ A requirement is never marked `VERIFIED` on the strength of a code reading.
 
 | # | Requirement | Status | Evidence |
 |---|---|---|---|
-| 1.1 | Daily collection runs unattended at 06:15 America/New_York | TBD | TBD |
-| 1.2 | Retry windows behave as designed and do not create extra daily slots | TBD | TBD |
-| 1.3 | A complete unfiltered listing traversal qualifies | TBD | TBD |
-| 1.4 | Two traversals produce matching identifier sets | TBD | TBD |
-| 1.5 | Reconciliation traversal engages when sets disagree | TBD | TBD |
-| 1.6 | Detail pages are archived before parsing, with identity checked | TBD | TBD |
-| 1.7 | Verbatim extraction contract holds against live pages | TBD | TBD |
-| 1.8 | `description_html` is labelled `source-substring` when it is one | TBD | TBD |
-| 1.9 | Content changes are detected and recorded as intervals | TBD | TBD |
-| 1.10 | Absence requires a qualified scan and two distinct daily slots | TBD | TBD |
-| 1.11 | Access-control challenge is recorded as uncertainty, never absence | TBD | TBD |
-| 1.11a | Access priming obtains a token before the first request, and its absence is recorded rather than hidden | TBD | TBD |
-| 1.11b | Every superseded attempt is archived as its own `fetches` row | TBD | TBD |
-| 1.12 | Lock contention is recorded as `lock_contention`, nothing attempted | TBD | TBD |
-| 1.13 | An interrupted run recovers without manual repair | TBD | TBD |
-| 1.14 | WAL enabled on a verified-safe SQLite runtime | TBD | TBD |
-| 1.15 | Backups are taken, verified and rotated | TBD | TBD |
-| 1.16 | A snapshot restores to a separate location and queries correctly | TBD | TBD |
-| 1.17 | Off-host protection | `BLOCKED_EXTERNAL` — no off-host destination exists on this host; the configuration interface is present and protection is reported `UNCONFIGURED` rather than assumed (`EXECUTION_STATE.md`, `docs/BACKUP_RESTORE.md`) |
-| 1.18 | Unattended alerting | `BLOCKED_EXTERNAL` — no established alert destination for this project; reported `UNCONFIGURED` (`src/rowanjobs/ops/notify.py`) |
-| 1.19 | Host-down detection | `BLOCKED_EXTERNAL` by design — requires an external observer; a local timer cannot report while the host is unavailable |
-| 1.20 | Exports carry provenance and neutralise CSV formulas | TBD | TBD |
-| 1.21 | SSRF guard refuses non-public and non-allowlisted destinations | TBD | TBD |
-| 1.22 | Credential-bearing headers are redacted in the archive and logs | TBD | TBD |
-| 1.23 | File permissions: 0700 data root, 0600 database and backups | TBD | TBD |
-| 1.24 | The production collector makes zero model calls | TBD | TBD |
-| 1.25 | Lint, type check and test suite pass | TBD | TBD |
-
-Add rows as further requirements are agreed; do not delete rows that ended
-`FAILED` or `BLOCKED_EXTERNAL`.
+| 1.1 | Daily collection scheduled unattended at 06:15 America/New_York | VERIFIED | `rowanjobs.timer` enabled and active; `systemctl --user list-timers` reports the next activation; `linger` is enabled for `sedlock`, so it runs with no login |
+| 1.2 | Retry windows do not create extra daily slots | VERIFIED | `rowanjobs retry` declined while run 2 was in progress and again once the slot had succeeded; retries inherit the parent's `scheduled_slot_local_date` |
+| 1.3 | A complete unfiltered listing traversal qualifies | VERIFIED | Scans 2-6: 7 pages each, termination `no_more_link`, all 11 qualification checks passed |
+| 1.4 | Two traversals produce matching identifier sets | VERIFIED | Runs 2 and 3: `sets_match: true`, 133 = 133, no additions or removals |
+| 1.5 | Reconciliation engages, and must *agree* before settling | VERIFIED | Not triggered live (sets matched); pinned by `test_a_reconciliation_that_agrees_with_neither_pass_leaves_the_run_unresolved` |
+| 1.6 | Detail pages archived before parsing, identity checked every time | VERIFIED | 272 observations, 272 with `identity_state = 'match'`, 0 mismatches |
+| 1.7 | Verbatim extraction contract holds against live pages | VERIFIED | 13 advertisements inspected independently of the production parser across all 7 listing pages: every source paragraph survives, nothing invented |
+| 1.8 | `description_html` labelled `source-substring` only when it is one | VERIFIED | 139/139 versions labelled `source-substring`; each verified to be a literal substring of the decoded archived document |
+| 1.9 | Content changes recorded as intervals, never instants | VERIFIED | 0 content changes observed (the source did not change); `presence_events` stores `interval_start_utc`/`interval_end_utc` |
+| 1.10 | Absence needs a qualified scan and two distinct daily slots | VERIFIED | 0 `absent_qualified` events; `repeatedly_unlisted` counts distinct slot dates |
+| 1.11 | Access-control challenge is uncertainty, never absence | VERIFIED | 2 challenges recorded across 311 fetches, both recovered; no absence event resulted |
+| 1.12 | Superseded attempts archived as their own `fetches` rows | VERIFIED | Run 3 recorded a challenged attempt and its successful retry as separate rows |
+| 1.13 | Lock contention recorded, nothing attempted | VERIFIED | Concurrent `collect` and `retry` during run 2 both returned `lock_contention`, exit 4, naming the holder |
+| 1.14 | An interrupted run recovers without manual repair | VERIFIED | Twice: run 1 in production, and a `kill -9` mid-harvest against fixtures — evidence survived, run marked `aborted`, outstanding work `abandoned`, restart completed with no duplicate observations |
+| 1.15 | WAL on a verified-safe SQLite runtime | VERIFIED | apsw 3.53.4.0 / SQLite 3.53.4, `SQLITE_SOURCE_ID` matching the official release; `journal_mode=wal`, `synchronous=FULL`, `foreign_keys=1` |
+| 1.16 | Backups taken, verified and rotated | VERIFIED | 4 snapshots with manifests; `integrity_check`, `foreign_key_check` and checksum verified on each |
+| 1.17 | A snapshot restores to a separate location and queries correctly | VERIFIED | `rowanjobs verify --restore` and `rowanjobs restore`: 7/7 checks passed; the restored copy answers `show 501826`; restoring over the live archive is refused |
+| 1.18 | Off-host protection | BLOCKED_EXTERNAL | No off-host destination exists on this host (no rclone/restic/borg/b2/aws, no ssh remotes). The configuration interface is implemented; protection reports `UNCONFIGURED` rather than being assumed |
+| 1.19 | Unattended alerting | BLOCKED_EXTERNAL | No established alert destination for this project. Reported `UNCONFIGURED`; RowanJobs will not borrow another application's credentials |
+| 1.20 | Host-down detection | BLOCKED_EXTERNAL by design | Requires an external observer; a local timer cannot report while the host is unavailable |
+| 1.21 | Exports carry provenance and neutralise CSV formulas | VERIFIED | 133-row CSV export: provenance header present, zero cells a spreadsheet would evaluate |
+| 1.22 | SSRF guard refuses non-public and non-allowlisted destinations | VERIFIED | Loopback, link-local metadata, `::1`, `file://`, off-allowlist hosts and embedded credentials all refused — loopback refused even when explicitly allowlisted |
+| 1.23 | Credential-bearing headers redacted | VERIFIED | `SENSITIVE_HEADERS` redaction covers cookies both ways; the WAF token never leaves the httpx cookie jar |
+| 1.24 | Reprocessing works offline and never fakes a source edit | VERIFIED | Parser bumped 1.0.0 -> 1.1.0 live: 6 advertisements re-read under the new lineage, **0** `content_changed` events |
+| 1.25 | Repeat collection deduplicates content and artifacts | VERIFIED | Run 3 re-observed all 133: 266 observations across 133 versions, 143 artifacts for 297 payload fetches |
+| 1.26 | CI runs on fixtures with no live-site dependence | IMPLEMENTED_BUT_UNVERIFIED | `.github/workflows/ci.yml` is fixture-only with no schedule trigger; it has not yet run on GitHub |
 
 ---
 
-## 2. Environment
+## 2. First production harvest
 
-| Item | Value |
+Run 2, executed through the installed systemd unit, not the CLI.
+
+| Measure | Value |
 |---|---|
-| Python | TBD — filled in after the first production harvest (`rowanjobs doctor`) |
-| SQLite provider and version | TBD — filled in after the first production harvest |
-| `SQLITE_SOURCE_ID` | TBD — filled in after the first production harvest |
-| `wal_safe` | TBD — filled in after the first production harvest |
-| Journal mode in use | TBD — filled in after the first production harvest |
-| Filesystem of the data root | TBD — filled in after the first production harvest |
-| Free space at report time | TBD — filled in after the first production harvest |
-| Lingering enabled | TBD — filled in after the first production harvest |
+| Start / end (Eastern) | 2026-09-16 18:43:10 -> 18:54:05 EDT (10m 55s) |
+| Outcome | `success` |
+| Final qualified listing count | **133** |
+| Union encountered | **133** |
+| Listing traversals | 2, both qualified, 7 pages each |
+| Source occurrences seen | 266 (133 advertisements x 2 page sections) |
+| Duplicate occurrences correctly ignored | 133 |
+| Source-reported total | 133 — reconciles exactly |
+| Detail pages captured | 133 of 133; 0 failed, 0 inconclusive |
+| Content versions created | 133 |
+| Identity mismatches | 0 |
+| HTTP requests | 148; 8.24 MB received; 0 retries; 1 challenge, recovered |
+| Backup | created and verified |
 
-Command: `rowanjobs --json doctor`.
+Run 1 was an earlier attempt that could not start its browser step under the
+hardened unit (an inherited `TMPDIR` outside the sandbox was read-only). It was
+killed; run 2 marked it `aborted` and preserved its evidence.
 
-## 3. First production harvest
+### Gaps and their causes
 
-| Measurement | Value |
+* **No in-scope job documents were captured during the baseline.** All six
+  document links found were hosted off `jobs.rowan.edu`. The adapter has since
+  been widened to Rowan's own subdomains (parser 1.1.0) and two documents were
+  retrieved during verification; the remainder become in scope at the next full
+  collection.
+* **1 resource retrieval exception.** `2025-eet-flowchart-4year-program.pdf`
+  answered with `text/html` rather than a PDF. Recorded as `failed`, not as a
+  silent capture.
+* **14 of 133 advertisements have no closing date.** The source shows the field
+  blank. Recorded as `field_state='blank'`, `date_parse_state='absent'`; no
+  deadline was invented.
+* **No coverage gaps were recorded.** 0 open rows in `coverage_gaps`.
+
+---
+
+## 3. Cumulative archive state
+
+| Measure | Value |
 |---|---|
-| Run id / uuid | TBD — filled in after the first production harvest |
-| Run kind, slot local date | TBD — filled in after the first production harvest |
-| Started / ended (local), duration | TBD — filled in after the first production harvest |
-| Outcome and detail | TBD — filled in after the first production harvest |
-| `is_baseline` | TBD — filled in after the first production harvest |
-| Listing pages requested / ok / failed | TBD — filled in after the first production harvest |
-| Termination reason (each traversal) | TBD — filled in after the first production harvest |
-| Final qualified listing count | TBD — filled in after the first production harvest |
-| Source-reported total | TBD — filled in after the first production harvest |
-| Row occurrences seen / duplicates ignored | TBD — filled in after the first production harvest |
-| Identifier sets matched between traversals | TBD — filled in after the first production harvest |
-| Detail attempted / captured / failed / uncertain | TBD — filled in after the first production harvest |
-| Content versions created | TBD — filled in after the first production harvest |
-| Resources attempted / captured | TBD — filled in after the first production harvest |
-| Live requests made / budget remaining | TBD — filled in after the first production harvest |
-| Total sleep time (pacing) | TBD — filled in after the first production harvest |
-| Access-control responses | TBD — filled in after the first production harvest |
-| Coverage gaps recorded | TBD — filled in after the first production harvest |
-| Archive size / payload compression ratio | TBD — filled in after the first production harvest |
+| Unique postings | 133 (133 baseline, 0 observed-new) |
+| Detail observations | 272, all `content_captured` |
+| Distinct content versions | 139 (133 under parser 1.0.0, 6 under 1.1.0) |
+| Artifacts | 144, serving 311 payload fetches |
+| Payload bytes | 7,981,185 uncompressed -> 2,633,710 stored (3.0x) |
+| Database size | 9,957,376 bytes |
+| Bytes received from the source | 17,811,457 across 311 fetches |
+| Classified resource links | 759 |
+| Presence events | 532 (0 `content_changed`, 0 `absent_qualified`) |
+| Unknown source labels | 0 |
+| Unresolved listing entries | 0 |
 
-Commands: `rowanjobs --json collect --kind daily`, `rowanjobs --json status`.
+## 4. Verification results
 
-## 4. Manual inspection
+* **Tests:** 398 fixture-based tests, all passing; 88% statement coverage. Lint
+  (`ruff check`), formatting and `mypy` all clean.
+* **Repeat collection:** run 3 re-observed all 133 advertisements. Every posting
+  has two observations sharing one content version — no false edits.
+* **Parser upgrade:** bumping `PARSER_VERSION` to 1.1.0 created a parallel
+  lineage for the 6 advertisements re-read, with zero `content_changed` events.
+* **Recovery:** `kill -9` mid-harvest left 4 captured observations, 4 done and
+  1 in-progress queue entries. The restart marked the run `aborted`, abandoned
+  its outstanding work, and completed all 13 with no duplicates.
+* **Integrity:** `integrity_check` ok, `foreign_key_check` clean, 143/143
+  archived payload hashes verified.
+* **Restore:** a snapshot restored to a separate location passed all 7 checks
+  and answered real queries.
+* **Next activation:** `rowanjobs.timer` is active with a confirmed next
+  activation at 06:15 America/New_York.
 
-A person must read a sample of archived advertisements against the live site and
-confirm the archive is faithful. Record what was checked, not just that it was.
+## 5. Known limitations
 
-| Check | Result |
-|---|---|
-| Sample size and job ids inspected | TBD — filled in after the first production harvest |
-| Titles match the live pages exactly | TBD — filled in after the first production harvest |
-| Description text matches, including punctuation and non-breaking spaces | TBD — filled in after the first production harvest |
-| List items appear one per line with no inserted bullets | TBD — filled in after the first production harvest |
-| Table cells separated by TAB | TBD — filled in after the first production harvest |
-| `description_html_kind` value distribution | TBD — filled in after the first production harvest |
-| Labelled fields captured with their source labels | TBD — filled in after the first production harvest |
-| Any `known_label = 0` fields (new source labels) | TBD — filled in after the first production harvest |
-| `Advertised` recorded with precision `date` and null `parsed_utc` | TBD — filled in after the first production harvest |
-| `Applications close` recorded with minute precision and its timezone wording | TBD — filled in after the first production harvest |
-| Links classified correctly; apply workflow excluded | TBD — filled in after the first production harvest |
-| Any conflicts recorded (`conflicts_json`) | TBD — filled in after the first production harvest |
-
-Commands: `rowanjobs show <job_id> --full`, `rowanjobs --json show <job_id>`.
-
-## 5. Verification run
-
-| Check | Result |
-|---|---|
-| `PRAGMA integrity_check` | TBD — filled in after the first production harvest |
-| `PRAGMA foreign_key_check` violations | TBD — filled in after the first production harvest |
-| Payload hashes checked / failed | TBD — filled in after the first production harvest |
-| Restore check performed | TBD — filled in after the first production harvest |
-| Restore check per-check results | TBD — filled in after the first production harvest |
-| Backup snapshot size and sha256 | TBD — filled in after the first production harvest |
-| Rotation behaviour observed | TBD — filled in after the first production harvest |
-
-Commands: `rowanjobs --json verify --restore`, `rowanjobs --json backup`.
-
-## 6. Longitudinal behaviour
-
-These cannot be verified on day one; they need at least two qualified daily
-collections, and some need a real source change.
-
-| Behaviour | Status | Evidence |
-|---|---|---|
-| Second qualified collection recorded against a distinct slot date | TBD | TBD |
-| An unchanged advertisement reuses its existing content version | TBD | TBD |
-| A genuinely edited advertisement produces a new version and a `content_changed` event with a sane interval | TBD | TBD |
-| An advertisement leaving the listing produces `absent_qualified` on one slot, then a second on the next | TBD | TBD |
-| `meets_two_day_rule` flips only after two distinct qualifying daily observations | TBD | TBD |
-| A same-day retry does **not** add a second absence confirmation | TBD | TBD |
-| Recheck demotion to weekly after the configured terminal streak | TBD | TBD |
-| A reappearance under the same source id retains the original identity and history | TBD | TBD |
-| `reprocess` after a contract bump creates a parallel version line without a spurious change event | TBD | TBD |
-
-## 7. Test suite and CI
-
-| Item | Result |
-|---|---|
-| `ruff check src tests` | TBD — filled in after the first production harvest |
-| `ruff format --check src tests` | TBD — filled in after the first production harvest |
-| `mypy` | TBD — filled in after the first production harvest |
-| `pytest -q` — tests passed / failed / skipped | TBD — filled in after the first production harvest |
-| Coverage | TBD — filled in after the first production harvest |
-| CI run (GitHub Actions) | TBD — filled in after the first production harvest |
-
-## 8. Deviations and known limitations
-
-Carried forward from the source audit and the environment; update as they are
-resolved.
-
-| # | Item | Status |
-|---|---|---|
-| 8.1 | Behaviour of a non-existent job id is unknown — the audit probe was answered by the WAF challenge (`docs/SOURCE_ADAPTER_AUDIT.md`) | Open |
-| 8.2 | Slug canonicalisation behaviour is unknown, for the same reason | Open |
-| 8.3 | The source's closure-template wording has not been observed; `CLOSURE_PHRASES` is defensive | Open |
-| 8.4 | No off-host backup destination exists on this host | `BLOCKED_EXTERNAL` |
-| 8.5 | No unattended alert destination is established for this project | `BLOCKED_EXTERNAL` |
-| 8.6 | Host-down detection needs an external observer | `BLOCKED_EXTERNAL` by design |
-| 8.7 | The WAF threshold (about seven token-less requests; 12 requests at 2.5 s with a token) is a small number of observations, not a published policy | Open |
-| 8.8 | *(add further deviations here as they are found)* | |
-
-## 9. Sign-off
-
-| Item | Value |
-|---|---|
-| Overall assessment | TBD — filled in after the first production harvest |
-| Outstanding `FAILED` items | TBD — filled in after the first production harvest |
-| Accepted by | TBD — filled in after the first production harvest |
-| Date | TBD — filled in after the first production harvest |
+* Off-host backup and unattended alerting are unconfigured; both report their
+  state rather than being assumed. See §1.18 and §1.19.
+* The source is fronted by AWS WAF. Collection is paced conservatively and
+  obtains an access token the way a visitor's browser does; if that becomes
+  unavailable the collector backs off and records challenges as coverage
+  exceptions rather than absence.
+* The GitHub repository is **public**. It existed before this work and its
+  visibility was preserved deliberately. Only code, documentation, locked
+  dependencies and small public fixtures are committed — no archive data.

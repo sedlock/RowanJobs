@@ -68,7 +68,9 @@ whenever a milestone completes or a blocker changes.
 - [x] Deployment (systemd user units, timer enabled, lingering already on)
 - [x] First production harvest (run 2, 2026-09-16, success)
 - [x] Manual inspection of 13 archived advertisements across all 7 listing pages
-- [ ] Verification run, independent review, acceptance report
+- [x] Verification run (run 3): 133 re-observed, perfect content deduplication
+- [x] Independent adversarial review; 3 critical + 8 lesser findings fixed and pinned
+- [x] Acceptance report (docs/ACCEPTANCE.md) with measured results
 - [ ] Push to GitHub
 
 ## Access-control findings (measured 2026-09-16)
@@ -150,3 +152,32 @@ document in every case; every source paragraph survives in `description_text`
 with no substantive characters lost or invented; job number and title agree with
 the raw markup; the listing summary is preserved separately from the detail
 description.
+
+## Post-review state (2026-09-16 evening)
+
+An independent review demonstrated three ways the archive could have made a
+false historical claim. All are fixed, pinned by tests, and the production
+archive has been migrated (schema v5):
+
+1. Bumping `TEXT_CONTRACT_VERSION` or `PARSER_VERSION` alone produced a
+   fabricated `content_changed` event. Comparisons are now scoped by the whole
+   lineage `(parser_version, contract_version, text_contract_version)`, which
+   `posting_versions` records and `content_fingerprint` folds in.
+2. A reconciliation traversal that qualified but agreed with neither earlier
+   pass was treated as settling a disagreement, allowing a false absence.
+   Reconciliation must now agree, and no absence claim may contradict any
+   qualified traversal in the same run.
+3. A closure phrase in an advertisement's own prose marked a live posting closed
+   and discarded its description. Closure detection now excludes the body and
+   requires closure vocabulary; a notice beside a real body is a recorded
+   conflict with the content kept.
+
+`PARSER_VERSION` is now **1.1.0** (job documents on any `*.rowan.edu` host are in
+scope). Verified live: 6 advertisements re-read under the new lineage produced
+**zero** content-change events. The next full collection will re-extract the
+remaining 127 under 1.1.0 — expected, and not a source change.
+
+## Remaining
+
+- Push to `sedlock/RowanJobs` (public; visibility preserved as found).
+- Off-host backup and unattended alerting remain `BLOCKED_EXTERNAL`.

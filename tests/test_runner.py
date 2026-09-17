@@ -639,3 +639,20 @@ def test_a_reconciliation_that_agrees_with_neither_pass_leaves_the_run_unresolve
     assert (
         db.scalar("SELECT COUNT(*) FROM presence_events WHERE event_kind = 'absent_qualified'") == 0
     )
+
+
+def test_a_bounded_run_does_not_claim_success_with_work_left_queued(collect) -> None:
+    """A capped detail pass has not covered what it discovered.
+
+    Reporting success would tell an operator the day is fully collected when
+    most advertisements were never fetched.
+    """
+    result = collect(
+        make_source({"1001": "A", "1002": "B", "1003": "C"}),
+        max_details=1,
+        skip_verification=True,
+    )
+
+    assert result.outcome == "partial"
+    assert "not attempted" in (result.detail or "")
+    assert result.counts["queue"]["pending"] == 2

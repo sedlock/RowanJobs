@@ -439,7 +439,9 @@ class Collector:
             "app_version": __version__,
         }
 
-        outcome, detail = self._outcome(discovery, final_scan, detail_stats, errors, unresolved)
+        outcome, detail = self._outcome(
+            discovery, final_scan, detail_stats, errors, unresolved, counts["queue"]
+        )
         return CollectionResult(
             run_id=run_id,
             run_uuid=run_uuid,
@@ -796,6 +798,7 @@ class Collector:
         detail_stats: dict[str, Any],
         errors: list[dict[str, Any]],
         unresolved: bool,
+        queue: dict[str, int],
     ) -> tuple[str, str | None]:
         if discovery is None:
             return "failed", "discovery traversal could not be completed"
@@ -806,6 +809,11 @@ class Collector:
                 "absence conclusions suppressed",
             )
         problems: list[str] = []
+        outstanding = queue.get("pending", 0) + queue.get("in_progress", 0)
+        if outstanding:
+            # A bounded or interrupted detail pass has not covered what it
+            # discovered, so the run cannot claim to have collected the day.
+            problems.append(f"{outstanding} queued detail retrievals were not attempted")
         if unresolved:
             problems.append("listing sets did not reconcile")
         if detail_stats.get("detail_failed"):

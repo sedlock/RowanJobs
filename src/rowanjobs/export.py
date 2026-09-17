@@ -221,6 +221,10 @@ def export_to_path(
 ) -> tuple[Path, int]:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Exports carry full advertisement text; keep them as restrictive as the
+    # rest of the data root rather than relying on the directory alone.
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
     with path.open("w", encoding="utf-8", newline="") as fh:
         count = (
             write_csv_export(db, dataset, fh, **filters)
