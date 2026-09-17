@@ -55,7 +55,7 @@ A requirement is never marked `VERIFIED` on the strength of a code reading.
 | 1.23 | Credential-bearing headers redacted | VERIFIED | `SENSITIVE_HEADERS` redaction covers cookies both ways; the WAF token never leaves the httpx cookie jar |
 | 1.24 | Reprocessing works offline and never fakes a source edit | VERIFIED | Parser bumped 1.0.0 -> 1.1.0 live: 6 advertisements re-read under the new lineage, **0** `content_changed` events |
 | 1.25 | Repeat collection deduplicates content and artifacts | VERIFIED | Run 3 re-observed all 133: 266 observations across 133 versions, 143 artifacts for 297 payload fetches |
-| 1.26 | CI runs on fixtures with no live-site dependence | IMPLEMENTED_BUT_UNVERIFIED | `.github/workflows/ci.yml` is fixture-only with no schedule trigger; it has not yet run on GitHub |
+| 1.26 | CI runs on fixtures with no live-site dependence | VERIFIED | Run 35168931918 on `main` passed in 29s: lint, format, mypy, the SQLite WAL-fix assertion, the full test suite, and a check that no database or runtime data is committed. No schedule trigger, no secrets, no live-site access |
 
 ---
 

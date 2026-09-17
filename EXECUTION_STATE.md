@@ -71,7 +71,7 @@ whenever a milestone completes or a blocker changes.
 - [x] Verification run (run 3): 133 re-observed, perfect content deduplication
 - [x] Independent adversarial review; 3 critical + 8 lesser findings fixed and pinned
 - [x] Acceptance report (docs/ACCEPTANCE.md) with measured results
-- [ ] Push to GitHub
+- [x] Pushed to https://github.com/sedlock/RowanJobs (main)
 
 ## Access-control findings (measured 2026-09-16)
 
@@ -179,5 +179,12 @@ remaining 127 under 1.1.0 — expected, and not a source change.
 
 ## Remaining
 
-- Push to `sedlock/RowanJobs` (public; visibility preserved as found).
-- Off-host backup and unattended alerting remain `BLOCKED_EXTERNAL`.
+- Off-host backup and unattended alerting remain `BLOCKED_EXTERNAL`: nothing is
+  configured on this host and RowanJobs will not invent a destination. The
+  configuration interfaces exist (`[backup] offhost_kind/offhost_target`,
+  `[notify] kind/command`).
+- The root filesystem is at 87% used (~17 GiB free). The archive grows roughly
+  2 MB a day, so this is not urgent, but it is the disk the data root lives on.
+- `sedlock/RowanJobs` is **public**. It existed before this work and its
+  visibility was preserved deliberately; only code, docs, locked dependencies
+  and small public fixtures are committed.
