@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
+import rowanjobs
 from rowanjobs.config import Config
 from rowanjobs.db import Database
 from rowanjobs.reprocess import reprocess_details, reprocess_listings
@@ -20,6 +21,11 @@ from rowanjobs.reprocess import reprocess_details, reprocess_listings
 from .conftest import LISTING_URL, FakeSource, build_detail_page, build_listing_page, listing_job
 
 DETAIL_URL = "https://jobs.rowan.edu/en-us/job/1001/job-1001"
+
+# The shipped versions, read rather than hard-coded: bumping one is a normal
+# event and must not require editing assertions.
+BASELINE_PARSER = rowanjobs.PARSER_VERSION
+BASELINE_CONTRACT = rowanjobs.CONTRACT_VERSION
 
 # Modules import the version constants by value, so each reference has to be
 # repointed for the test to simulate a genuine parser/contract upgrade.
@@ -144,12 +150,12 @@ def test_the_old_interpretation_is_kept_alongside_the_new_one(
         "SELECT parser_version, contract_version FROM extractions "
         "WHERE parser_name = 'pageup_detail' ORDER BY extraction_id"
     )
-    assert [e["parser_version"] for e in extractions] == ["1.0.0", "2.0.0"]
+    assert [e["parser_version"] for e in extractions] == [BASELINE_PARSER, "2.0.0"]
     versions = db.query(
         "SELECT contract_version, description_text, first_run_id FROM posting_versions "
         "ORDER BY posting_version_id"
     )
-    assert [v["contract_version"] for v in versions] == ["1.0.0", "2.0.0"]
+    assert [v["contract_version"] for v in versions] == [BASELINE_CONTRACT, "2.0.0"]
     assert versions[0]["description_text"] == versions[1]["description_text"]
     # The reinterpretation belongs to no run: it observed nothing.
     assert versions[0]["first_run_id"] is not None
@@ -286,7 +292,7 @@ def test_listing_payloads_can_be_reinterpreted_offline_too(
     parsers = db.query(
         "SELECT DISTINCT parser_version FROM extractions WHERE parser_name = 'pageup_listing'"
     )
-    assert {p["parser_version"] for p in parsers} == {"1.0.0", "2.0.0"}
+    assert {p["parser_version"] for p in parsers} == {BASELINE_PARSER, "2.0.0"}
     # Listing reprocessing never invents listing entries or scans.
     assert int(db.scalar("SELECT COUNT(*) FROM listing_scans")) == 2
 

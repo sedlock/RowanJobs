@@ -28,7 +28,7 @@ import apsw
 
 from .. import __version__
 from ..archive import ArchiveStore
-from ..db import Database, open_db, open_readonly
+from ..db import Database, open_readonly
 from ..db.migrations import SCHEMA_VERSION
 from ..timeutil import local_date_str, now_utc, parse_utc, utc_str
 from .atomic import write_json
@@ -514,8 +514,10 @@ class BackupManager:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(Path(backup_path), destination)
         destination.chmod(0o600)
-        # Prove the copy opens and migrates cleanly before handing it back.
-        db = open_db(destination, migrate=False)
+        # Prove the copy opens before handing it back -- read-only, so the
+        # restored file stays a single self-contained database rather than
+        # acquiring -wal/-shm sidecars just from being checked.
+        db = open_readonly(destination)
         db.close()
         return destination
 

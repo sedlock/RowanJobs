@@ -1255,6 +1255,12 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--limit", type=int)
     export.set_defaults(func=cmd_export)
 
+    diagnostics = sub.add_parser(
+        "diagnostics", parents=[shared], help="write a sanitised diagnostic bundle"
+    )
+    diagnostics.add_argument("--output", help="destination file (default: exports directory)")
+    diagnostics.set_defaults(func=cmd_diagnostics)
+
     deploy = sub.add_parser(
         "record-deployment", parents=[shared], help="write the runtime deployment manifest"
     )

@@ -462,10 +462,12 @@ def test_diff_reports_what_changed_between_two_content_versions(
     payload = captured_json(capsys)
     assert payload["changed"]["description_text"] is True
     assert payload["changed"]["title"] is False
+    import rowanjobs
+
     assert payload["comparison_lineage"] == {
-        "parser_version": "1.0.0",
-        "contract_version": "1.0.0",
-        "text_contract_version": "1.0.0",
+        "parser_version": rowanjobs.PARSER_VERSION,
+        "contract_version": rowanjobs.CONTRACT_VERSION,
+        "text_contract_version": rowanjobs.TEXT_CONTRACT_VERSION,
     }
     assert any(line.startswith("+Edited wording.") for line in payload["unified_diff"])
     assert "cannot appear here as a source edit" in payload["note"]
@@ -500,3 +502,25 @@ def test_doctor_reports_a_rejected_configuration_as_json(tmp_path, capsys) -> No
     assert payload["ok"] is False
     assert payload["failures"] == ["configuration"]
     assert payload["checks"][0]["name"] == "configuration"
+
+
+def test_every_command_in_the_documented_interface_is_reachable() -> None:
+    """A subcommand that exists in the module but is never registered is invisible.
+
+    cmd_diagnostics shipped unregistered once; this keeps the parser and the
+    implemented commands in step.
+    """
+    import argparse
+
+    import rowanjobs.cli as cli_module
+
+    parser = cli_module.build_parser()
+    registered: set[str] = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            registered |= set(action.choices)
+
+    implemented = {
+        name[len("cmd_") :].replace("_", "-") for name in dir(cli_module) if name.startswith("cmd_")
+    }
+    assert implemented <= registered, f"unregistered commands: {sorted(implemented - registered)}"

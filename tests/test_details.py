@@ -19,6 +19,7 @@ from rowanjobs.collect.repo import Repository
 from rowanjobs.config import Config
 from rowanjobs.db import Database
 from rowanjobs.net.client import SourceClient
+from rowanjobs.net.guard import UrlPolicy
 
 from .conftest import (
     LISTING_URL,
@@ -731,3 +732,91 @@ def test_a_closure_notice_alongside_a_body_captures_the_content_as_a_conflict(
         (outcome.posting_version_id,),
     )
     assert "must survive" in str(version["description_text"])
+
+
+def test_widening_the_document_scope_takes_effect_without_a_content_change(
+    cfg: Config, repo: Repository, run_environment, make_client, register, db: Database
+) -> None:
+    """Stored classifications must never disagree with what was retrieved.
+
+    The same unchanged advertisement is observed twice; between the two, the
+    adapter is upgraded so the document's host counts as in scope. The second
+    observation records the new decision *and* retrieves the file -- it is not
+    frozen by what the adapter decided the first time this version was seen --
+    while the advertisement itself is not reported as having changed.
+    """
+    import rowanjobs
+    from rowanjobs.extract import pageup_detail
+
+    document = "https://engineering.rowan.edu/_docs/flow.pdf"
+    page = build_detail_page(
+        job_id=JOB_A, body_html=f'<p>See <a href="{document}">the chart</a>.</p>'
+    )
+    posting_id = register(JOB_A, URL_A)
+    original = pageup_detail.classify_link
+
+    def narrow(url: str, anchor: Any) -> tuple[str, str, str | None]:
+        if url == document:
+            return "job_document", "exclude", "hosted off the career site"
+        return original(url, anchor)
+
+    pageup_detail.classify_link = narrow  # type: ignore[assignment]
+    try:
+        first = DetailCollector(
+            cfg=cfg,
+            repo=repo,
+            client=make_client(FakeSource().page(URL_A, page)),
+            run_id=run_environment["run_id"],
+        ).collect(external_job_id=JOB_A, url=URL_A, posting_id=posting_id, checked_because="listed")
+    finally:
+        pageup_detail.classify_link = original  # type: ignore[assignment]
+
+    assert first.resources == []
+    assert {
+        r["collection_decision"]
+        for r in db.query(
+            "SELECT collection_decision FROM resource_links WHERE url_resolved = ?", (document,)
+        )
+    } == {"exclude"}
+
+    # The upgraded adapter is a new parser version, which is what gives the new
+    # reading its own extraction and its own classification rows.
+    previous_parser = rowanjobs.PARSER_VERSION
+    for module in (
+        rowanjobs,
+        pageup_detail,
+        repo.__module__ and __import__("rowanjobs.collect.repo", fromlist=["x"]),
+    ):
+        module.PARSER_VERSION = "9.9.9"  # type: ignore[attr-defined]
+    try:
+        source = FakeSource().page(URL_A, page)
+        source.add(document, bytes_response(b"%PDF-1.4 fake"))
+        second = DetailCollector(
+            cfg=cfg,
+            repo=repo,
+            client=make_client(
+                source,
+                policy=UrlPolicy(
+                    ("jobs.rowan.edu", "rowan.edu"), allow_subdomains=True, resolve=False
+                ),
+            ),
+            run_id=run_environment["run_id"],
+        ).collect(external_job_id=JOB_A, url=URL_A, posting_id=posting_id, checked_because="listed")
+    finally:
+        for module in (
+            rowanjobs,
+            pageup_detail,
+            __import__("rowanjobs.collect.repo", fromlist=["x"]),
+        ):
+            module.PARSER_VERSION = previous_parser  # type: ignore[attr-defined]
+
+    assert {r["outcome"] for r in second.resources} == {"captured", "reused_within_run"}
+    assert "fetch" in {
+        r["collection_decision"]
+        for r in db.query(
+            "SELECT collection_decision FROM resource_links WHERE url_resolved = ?", (document,)
+        )
+    }, "the new decision must be recorded, not only acted on"
+    assert (
+        db.scalar("SELECT COUNT(*) FROM presence_events WHERE event_kind = 'content_changed'") == 0
+    ), "our own reading changed; the advertisement did not"

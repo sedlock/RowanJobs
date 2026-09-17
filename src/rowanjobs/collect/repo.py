@@ -620,7 +620,29 @@ class Repository:
                         date.get("parsed_local_date"),
                     ),
                 )
-            for position, link in enumerate(extraction.links, start=1):
+        return version_id, True
+
+    def record_resource_links(
+        self,
+        *,
+        extraction_id: int,
+        posting_version_id: int,
+        links: list[dict[str, Any]],
+        observed_at_utc: str,
+    ) -> None:
+        """Record what *this* extraction decided about each linked resource.
+
+        Written on every content capture, not only when a version is created: a
+        link's classification belongs to the extraction that read it, so a
+        widened collection scope must be visible without waiting for the
+        advertisement's content to change. Extractions are deduplicated by
+        (artifact, parser, contracts), so an unchanged page re-observed tomorrow
+        reuses the same extraction and adds no rows.
+        """
+        if not links:
+            return
+        with self.db.write():
+            for position, link in enumerate(links, start=1):
                 self.db.execute(
                     """
                     INSERT OR IGNORE INTO resource_links(
@@ -630,7 +652,7 @@ class Repository:
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
-                        version_id,
+                        posting_version_id,
                         extraction_id,
                         link["parent_kind"],
                         link["url_raw"],
@@ -644,7 +666,6 @@ class Repository:
                         observed_at_utc,
                     ),
                 )
-        return version_id, True
 
     # -------------------------------------------------------------- resources
 

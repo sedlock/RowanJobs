@@ -6,8 +6,10 @@ summarised, rewritten or corrected -- see CLAUDE.md.
 
 __version__ = "1.0.0"
 
-# Bumped whenever the meaning of an extraction changes.
-PARSER_VERSION = "1.0.0"
+# Bumped whenever the meaning of an extraction changes -- including how links
+# are classified, since that decides what the collector retrieves. 1.1.0 widened
+# job documents from the career site to Rowan's own domain.
+PARSER_VERSION = "1.1.0"
 # Bumped whenever the rules that decide "is this content different?" change.
 CONTRACT_VERSION = "1.0.0"
 # Bumped whenever markup -> plain text rules change.

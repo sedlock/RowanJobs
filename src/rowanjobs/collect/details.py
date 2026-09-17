@@ -252,6 +252,12 @@ class DetailCollector:
             run_id=self.run_id,
             observed_at_utc=observed_at,
         )
+        self.repo.record_resource_links(
+            extraction_id=extraction_id,
+            posting_version_id=version_id,
+            links=extraction.links,
+            observed_at_utc=observed_at,
+        )
         conflicts.extend(self._field_conflicts(extraction))
 
         self.repo.record_posting_url(
@@ -277,7 +283,7 @@ class DetailCollector:
         outcome.version_created = created
         if self.cfg.collection.collect_resources and outcome.observation_id:
             outcome.resources = self._collect_resources(
-                version_id, outcome.observation_id, extraction
+                extraction_id, outcome.observation_id, extraction
             )
         return outcome
 
@@ -381,15 +387,14 @@ class DetailCollector:
     # -------------------------------------------------------------- resources
 
     def _collect_resources(
-        self, version_id: int, observation_id: int, extraction: Any
+        self, extraction_id: int, observation_id: int, extraction: Any
     ) -> list[dict[str, Any]]:
         """Retrieve the in-scope documents this extraction identified.
 
-        The decision comes from the *current* extraction, not from the
-        ``resource_links`` rows written when the version was first seen. Those
-        rows record what the adapter decided at the time and stay as they are;
-        if the collection scope is widened later, a re-observation of unchanged
-        content still picks up the newly in-scope document.
+        The decision comes from this extraction, and the matching
+        ``resource_links`` row was written for this extraction too, so the
+        stored classification and what was actually retrieved can never
+        disagree -- including after the collection scope is widened.
         """
         out: list[dict[str, Any]] = []
         for link in extraction.links:
@@ -397,9 +402,9 @@ class DetailCollector:
                 continue
             url = str(link["url_resolved"])
             row = self.repo.db.one(
-                "SELECT resource_link_id FROM resource_links WHERE posting_version_id = ? "
+                "SELECT resource_link_id FROM resource_links WHERE extraction_id = ? "
                 "AND url_raw = ? ORDER BY resource_link_id LIMIT 1",
-                (version_id, link["url_raw"]),
+                (extraction_id, link["url_raw"]),
             )
             link_id = int(row["resource_link_id"]) if row else None
             cached = self._resource_cache.get(url)
