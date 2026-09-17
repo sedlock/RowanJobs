@@ -23,8 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # Belt and braces: even a stray live fetch would be refused.
-      ROWANJOBS_DATA_ROOT: ${{ runner.temp }}/rowanjobs-ci
+      # Belt and braces: a stray live fetch would write here, not into a real
+      # data root. A literal path on purpose -- the `runner` context is not
+      # available in a job-level `env` block, and referencing it makes GitHub
+      # reject the whole workflow before any job starts.
+      ROWANJOBS_DATA_ROOT: /tmp/rowanjobs-ci
     steps:
       - uses: actions/checkout@v4
 
