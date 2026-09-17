@@ -7,11 +7,11 @@ number could not be measured it says so; nothing here is an estimate.
 |---|---|
 | Report date | 2026-09-16 (Eastern) |
 | Application version | `1.0.0`, parser `1.1.0` (`src/rowanjobs/__init__.py`) |
-| Git revision at first harvest | `d3679f3` (recorded in `runtime/deployment.json`) |
-| Git revision at report | `4c83f40` |
+| Git revision at first harvest | `d3679f3` as recorded in `runtime/deployment.json`. Commit authorship was later corrected to the repository's configured identity before the first push, so that hash no longer resolves; the same tree is `b8be440` |
+| Git revision at report | `b93d9fe` |
 | Host / user | `entropy` (Ubuntu 24.04.4), `sedlock` |
 | Data root | `~/.local/share/rowanjobs/` |
-| Database | `~/.local/share/rowanjobs/rowanjobs.db`, schema v5 |
+| Database | `~/.local/share/rowanjobs/rowanjobs.db`, schema v6 |
 
 ## Status vocabulary
 
@@ -118,7 +118,7 @@ killed; run 2 marked it `aborted` and preserved its evidence.
 
 ## 4. Verification results
 
-* **Tests:** 400 fixture-based tests, all passing; 88% statement coverage. Lint
+* **Tests:** 402 fixture-based tests, all passing; 88% statement coverage. Lint
   (`ruff check`), formatting and `mypy` all clean.
 * **Repeat collection:** run 3 re-observed all 133 advertisements. Every posting
   has two observations sharing one content version — no false edits.
