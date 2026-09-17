@@ -239,9 +239,9 @@ Recorded in `EXECUTION_STATE.md`: the system Python's `sqlite3` on this host is
 3.45.1 (affected); `pysqlite3-binary` bundles 3.51.1 (affected); `apsw` 3.53.4.0
 bundles SQLite 3.53.4 with `SQLITE_SOURCE_ID 2026-07-24 19:02:57 bf7c7f30…8a88`,
 matching the official release hash — so WAL is enabled on this verified runtime.
-`pyproject.toml` pins `apsw>=3.53.4.0,<3.54` for exactly this reason; its
-comment points at `docs/SQLITE_RUNTIME.md`, which is this section — the evidence
-is not duplicated in a separate file.
+`pyproject.toml` pins `apsw>=3.53.4.0,<3.54` for exactly this reason, and its
+comment points back at this document — the evidence is not duplicated in a
+separate file.
 
 ### Write transactions
 
@@ -249,6 +249,14 @@ is not duplicated in a separate file.
 two writers cannot both read, both try to upgrade, and deadlock. Nesting
 `write()` raises deliberately: a savepoint would hide a long transaction, which
 is the thing being guarded against.
+
+Migrations run one per transaction. A migration that has to rebuild a table
+other rows reference declares `REQUIRES_FK_OFF = True`; `apply_migrations` turns
+`PRAGMA foreign_keys` off around it (SQLite only honours that pragma outside a
+transaction), restores it in a `finally`, and then runs `foreign_key_check`,
+failing the migration if the rebuild left a dangling reference — which is the
+whole point of having turned enforcement off
+(`db/migrations/__init__.py`, `m0005_resource_links_per_extraction`).
 
 **No write transaction is ever held across network I/O.** Every method in
 `src/rowanjobs/collect/repo.py` owns its own short transaction and performs no
@@ -279,6 +287,14 @@ artifact instead of storing a second copy.
 Responses larger than the configured ceiling are stored as an explicit
 `capture_state='partial'` with a recorded `capture_exception` — never silently
 truncated and called complete.
+
+The read path is guarded too. `ArchiveStore.get` decompresses, checks the length
+against `byte_length`, and then re-computes the SHA-256 and compares it with the
+stored `sha256`, raising rather than returning bytes that do not hash back
+(`archive/store.py`). Length alone was not enough: payloads under 256 bytes are
+stored uncompressed, so without the hash check they had no integrity check at all
+on read, and silently handing back corrupted bytes is the worst failure an
+evidence archive can have. `verify`/`verify_all` build on the same call.
 
 ### Other durability details
 

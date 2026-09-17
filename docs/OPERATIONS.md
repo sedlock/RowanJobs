@@ -53,10 +53,14 @@ conservative. It:
 2. Reads the `daily` and `retry` runs recorded against that slot.
 3. Exits 0 with "no scheduled collection recorded for slot …" if there is none —
    a retry never *starts* a day's collection.
-4. Exits 0 if any run for the slot already succeeded.
-5. Exits 2 if the slot has used its `max_retries_per_slot` (default 2) attempts
+4. Exits 0 if a run for the slot is **still in progress** (`ended_at_utc` is
+   null) — a slow daily collection can still be going when a retry window opens,
+   and saying so is better than colliding with the collector lock and looking
+   like a failure.
+5. Exits 0 if any run for the slot already succeeded.
+6. Exits 2 if the slot has used its `max_retries_per_slot` (default 2) attempts
    and is still unresolved, leaving it for the next scheduled collection.
-6. Otherwise runs a collection with `run_kind='retry'`, `parent_run_id` set to
+7. Otherwise runs a collection with `run_kind='retry'`, `parent_run_id` set to
    the day's daily run, and `attempt_no` incremented.
 
 **A retry belongs to its parent's scheduled slot.** It never creates an extra
@@ -81,7 +85,9 @@ rowanjobs status
 Reads the archive **read-only** and prints, in order:
 
 - `collection` — the overall state and the last attempt, with its outcome and
-  duration.
+  duration. A second `last scheduled` line appears when the most recent
+  `daily`/`retry` run is not the most recent run of any kind, because the state
+  is judged on the scheduled one.
 - `last qualified discovery` — when the most recent traversal that *qualified*
   ended, its final count, what the source itself reported, and how many duplicate
   row occurrences were ignored. **`none` here means no absence conclusion can be
@@ -136,21 +142,27 @@ Defined in `src/rowanjobs/cli.py`; the health-derived subset in
 |---|---|---|---|
 | `0` | OK | Success, or an ordinary no-op (nothing to retry, nothing to do) | None |
 | `1` | FAILED | Collection failed: discovery could not be completed, or the run raised | Investigate; the next scheduled run will try again |
-| `2` | DEGRADED | Useful evidence collected, but with a coverage exception: no traversal qualified, listing sets did not reconcile, detail retrievals failed or were inconclusive, or the source applied an access-control challenge | Read `errors` / `coverage` in the run output; absence conclusions are suppressed for that run |
+| `2` | DEGRADED | Useful evidence collected, but with a coverage exception: no traversal qualified, listing sets did not reconcile, queued detail retrievals were left unattempted (a bounded `--max-details` pass or an interrupted one), detail retrievals failed or were inconclusive, or the source applied an access-control challenge | Read `errors` / `coverage` in the run output; absence conclusions are suppressed for that run |
 | `3` | PROTECTION | Collection was fine but protection is degraded: the backup failed, or there is no recent verified snapshot | Fix the backup before the next run; ingestion is unaffected |
 | `4` | LOCKED | Another collector held the lock; **nothing was attempted** | Usually benign (an overlapping manual run). Not a source failure and not an empty collection |
-| `5` | USAGE | Usage or configuration error | Fix the command line or the config file |
+| `5` | USAGE | Usage or configuration error. `doctor` also returns this when the configuration file is rejected, reporting it as a failed `configuration` check rather than failing to start — finding that before the timer does is the point of `doctor` | Fix the command line or the config file |
 
 `SuccessExitStatus=0 2 3` in both service units: 2 and 3 mean useful evidence was
 still collected, so systemd should not mark the unit failed. Only 1, 4 and 5 are
 real failures from the timer's point of view.
 
-`exit_code_for` maps health to a code: collection state `FAILED` → 1;
-`DEGRADED` or `UNKNOWN` → 2; otherwise, local backup state in
+`exit_code_for` maps health to a code: collection state `FAILED` **or `STALE`**
+→ 1; `DEGRADED` or `UNKNOWN` → 2; otherwise, local backup state in
 `FAILED`/`DEGRADED`/`UNPROTECTED` or off-host state `FAILED` → 3; else 0. Note
 that an `UNCONFIGURED` off-host state does **not** produce exit 3 — it is
 reported honestly but is not treated as a failure of something that was never
 set up.
+
+`STALE` means two or more scheduled days have passed without a qualified
+discovery (`collection.coverage_window.days_since_last_qualified >= 2`). A
+collector that has simply stopped running would otherwise keep reporting
+`HEALTHY` on the strength of its last successful run, which is exactly the
+failure an operator most needs to see.
 
 ---
 
@@ -198,15 +210,19 @@ in about ninety seconds; it cleared after about eleven minutes of quiet
 (`docs/SOURCE_ADAPTER_AUDIT.md`).
 
 **What the collector already did:** attempted to obtain an access token up
-front (workflow step 0, below), widened its inter-request interval by 1.6× per
-challenge, waited 45 s → 90 s → 180 s, re-solved the challenge through the
+front (workflow step 0), widened its inter-request interval by 1.6× per
+challenge (capped at 30 s), waited `challenge_backoff_seconds × 2^(n−1)` — 60 s
+→ 120 s → 240 s at the default of 60 — re-solved the challenge through the
 ordinary browser path if one is available, and stopped requesting after
 `max_consecutive_challenges` rather than hammering the source.
 
-If `errors` contains `access_priming_unavailable`, no token could be obtained
-before the run started — usually because Playwright is not installed. Collection
-continues and backs off when challenged, but coverage may be reduced. The
-`coverage.access_priming` field records what happened.
+If `errors` contains `access_priming_unavailable`, priming was **attempted and
+failed** — usually because Playwright is not installed. Collection continues and
+backs off when challenged, but coverage may be reduced. A run where the page
+loaded normally and the source simply issued no token is *not* an error: priming
+reports `{"primed": false, "required": false}` and nothing is added to `errors`,
+because no token exists until the source challenges. Either way,
+`coverage.access_priming` records what happened.
 
 **What to do:**
 
@@ -277,6 +293,34 @@ Common causes and responses:
 Do **not** relax a qualification check to make a run go green. If a check no
 longer expresses the right thing, change it deliberately and bump
 `QUALIFICATION_RULES_VERSION`, which records a new verdict beside the old one.
+
+### A `listing_disagreement_within_run` coverage gap
+
+**Symptom:** the gap appears in `status`, and an advertisement you expected an
+`absent_qualified` event for did not get one.
+
+**What it is:** one qualified traversal in the run listed the advertisement and
+a later qualified traversal did not. The run refuses to record absence that
+contradicts its own evidence, so the disagreement is recorded as a coverage
+exception instead (`src/rowanjobs/collect/events.py`). The gap names the scan and
+the `external_job_id`.
+
+**What to do:** nothing, usually — an advertisement withdrawn between two
+traversals looks exactly like this, and the next day's collection will settle it.
+If it recurs for many advertisements every run, the listing is changing under the
+traversal faster than the design assumes; look at the scan set comparison in
+`coverage_json` before concluding anything about withdrawals.
+
+### The collector has stopped: `STALE`
+
+**Symptom:** exit 1 from `status` with `collection.state = STALE`, while the last
+recorded run may well say `success`.
+
+**What it is:** `coverage_window.days_since_last_qualified` is 2 or more. The
+timer is not producing qualified discoveries. Check
+`systemctl --user list-timers 'rowanjobs*'`, whether lingering is still enabled,
+and the last journal entries for `rowanjobs.service`. The missed days are already
+listed in `coverage_window.missed_local_dates` and stay missed.
 
 ### Disk pressure
 
@@ -361,8 +405,11 @@ versions
 
 collection
   state                            RUNNING | NEVER_RUN | HEALTHY | DEGRADED |
-                                   FAILED | UNKNOWN
-  last_attempt                     run brief (see below), or null
+                                   STALE | FAILED | UNKNOWN
+  last_attempt                     run brief (see below) for the most recent run
+                                   of ANY kind, or null
+  last_scheduled_attempt           run brief for the most recent daily/retry
+                                   run — the one `state` is derived from
   last_completed                   most recent success-or-partial run brief
   last_qualified_discovery         scan_id, run_id, role, ended_at_utc/local,
                                    slot_local_date,
@@ -383,6 +430,13 @@ collection
                                    extraction_failed, extraction_partial,
                                    resource_exceptions, identity_mismatch
   coverage_gaps[]                  {kind, count, latest_utc} for UNRESOLVED gaps
+  coverage_window                  which scheduled days since the first
+                                   qualified scan actually have one:
+                                   first_covered_local_date,
+                                   last_covered_local_date, covered_days,
+                                   missed_local_dates (most recent 30),
+                                   missed_days, days_since_last_qualified,
+                                   and a note that a missed day is permanent
 
 archive
   state                            VERIFIED | DEGRADED
@@ -421,7 +475,8 @@ paths                              data_root, database, backups, logs, runtime,
 notes[]                            standing caveats
 ```
 
-A **run brief** (`last_attempt`, `last_completed`, `run_in_progress`) contains:
+A **run brief** (`last_attempt`, `last_scheduled_attempt`, `last_completed`,
+`run_in_progress`) contains:
 `run_id`, `run_uuid`-less summary fields `run_kind`, `attempt_no`,
 `parent_run_id`, `slot_local_date`, `is_baseline`, `started_at_utc/local`,
 `ended_at_utc/local`, `duration`, `outcome`, `outcome_detail`,
@@ -430,9 +485,24 @@ A **run brief** (`last_attempt`, `last_completed`, `run_in_progress`) contains:
 
 ### Reading it correctly
 
-- `collection.state = HEALTHY` requires the last run to have succeeded **and** a
-  qualified scan to exist. A successful run with no qualified scan is not
-  healthy.
+- `collection.state` describes the **scheduled** collection: it is derived from
+  `last_scheduled_attempt` (the most recent `daily` or `retry` run), falling back
+  to `last_attempt` only when no scheduled run exists at all. A deliberately
+  bounded manual or verification run therefore does not make the system look
+  degraded, and a manual success cannot paper over a failing timer
+  (`src/rowanjobs/ops/health.py::build_health`).
+- `collection.state = HEALTHY` requires that scheduled run to have succeeded
+  **and** a qualified scan to exist. A successful run with no qualified scan is
+  not healthy.
+- `collection.state = STALE` means `coverage_window.days_since_last_qualified`
+  is 2 or more: two scheduled days have gone by without a qualified discovery,
+  whatever the last run happened to return. It maps to exit **1**. Nothing else
+  in the payload detects a collector that has simply stopped — every other field
+  would keep describing the last successful run indefinitely.
+- `collection.coverage_window.missed_local_dates` lists days with no qualified
+  scan. Today counts as missed only once its scheduled slot has passed. Those
+  days are **permanent** gaps: a later collection observes today and cannot
+  reconstruct what was published on a day nobody looked.
 - `last_qualified_discovery = null` means **no absence conclusion is available
   from this archive at all**, whatever the other numbers say.
 - `failures.*` are lifetime totals. For "what went wrong today", read
@@ -487,3 +557,4 @@ project.
 | Weekly | `rowanjobs verify` | `integrity_check` ok, no FK violations, all payload hashes verify |
 | Weekly (automatic) | restore verification | Driven by `backup.restore_check_interval_days`; result in `runtime/restore-verification.json` |
 | After a deployment | `rowanjobs record-deployment --note "..."` | The manifest and `deployments` row are written |
+| When reporting or investigating a problem | `rowanjobs diagnostics` | A sanitised bundle in `<data_root>/exports/` (or `--output PATH`): health, recent runs, every scan assessment with its checks, coverage gaps, fetch exceptions, unknown source labels, unresolved listing rows, identity conflicts, resource outcomes, freshness counts and a posting sample. It excludes archived payloads, description text and markup, request/response headers and anything credential-shaped (`src/rowanjobs/ops/diagnostics.py`); it opens the archive read-only |

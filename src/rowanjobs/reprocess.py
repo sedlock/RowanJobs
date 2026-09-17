@@ -17,6 +17,7 @@ from .archive import ArchiveStore
 from .collect.repo import Repository
 from .db import Database
 from .extract.decode import decode_html
+from .extract.fingerprint import comparison_lineage
 from .extract.pageup_detail import parse_detail
 from .extract.pageup_listing import parse_listing
 from .timeutil import utc_str
@@ -138,7 +139,7 @@ def reprocess_details(
         )
         if created:
             report.versions_created += 1
-        if relink and _observation_contract(db, row["observation_id"]) != CONTRACT_VERSION:
+        if relink and _observation_lineage(db, row["observation_id"]) != comparison_lineage():
             with db.write():
                 db.execute(
                     "UPDATE posting_observations SET extraction_id = ?, "
@@ -151,14 +152,27 @@ def reprocess_details(
     return report
 
 
-def _observation_contract(db: Database, observation_id: Any) -> str | None:
+def _observation_lineage(db: Database, observation_id: Any) -> str | None:
+    """The comparison lineage an observation is currently linked to.
+
+    Comparing only ``contract_version`` meant that after a ``PARSER_VERSION`` or
+    ``TEXT_CONTRACT_VERSION`` bump -- exactly the cases lineage scoping exists
+    for -- the guard compared equal and ``--relink`` silently did nothing.
+    """
     row = db.one(
-        "SELECT v.contract_version FROM posting_observations o "
+        "SELECT v.parser_version, v.contract_version, v.text_contract_version "
+        "FROM posting_observations o "
         "JOIN posting_versions v ON v.posting_version_id = o.posting_version_id "
         "WHERE o.observation_id = ?",
         (int(observation_id),),
     )
-    return str(row["contract_version"]) if row else None
+    if row is None:
+        return None
+    return comparison_lineage(
+        str(row["parser_version"] or ""),
+        str(row["contract_version"]),
+        str(row["text_contract_version"]),
+    )
 
 
 def reprocess_listings(db: Database, *, limit: int | None = None) -> ReprocessReport:

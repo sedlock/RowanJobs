@@ -10,6 +10,13 @@ Default location: `~/.config/rowanjobs/config.toml`
 An unknown table or an unknown key inside a known table is a **hard error**, not
 a warning — a typo must not silently leave a policy at its default.
 
+`rowanjobs doctor` reports a rejected configuration as a **failed
+`configuration` check** and exits 5, rather than failing to start: finding the
+problem before the timer does is the point of `doctor`, and it can only do that
+if it survives long enough to say so (`src/rowanjobs/cli.py::cmd_doctor`). Any
+other command given an unloadable configuration prints the same `ValueError` and
+exits 5 without doing any work (`cli.py::main`).
+
 ## Resolution order
 
 | Setting | Precedence, highest first |
@@ -60,7 +67,7 @@ rather than per-module wishful thinking.
 | Key | Default | Meaning |
 |---|---|---|
 | `concurrency` | `1` | One live request at a time. |
-| `min_interval_seconds` | `1.5` | Minimum gap between live requests. Widened automatically after a challenge. |
+| `min_interval_seconds` | `2.5` | Minimum gap between live requests. Widened automatically after a challenge (×1.6 each time, capped at 30 s). The value comes from the 2026-09-16 source audit: roughly seven requests inside 90 seconds tripped the site's WAF. |
 | `connect_timeout_seconds` | `10.0` | TCP/TLS connect timeout. |
 | `read_timeout_seconds` | `30.0` | Response read timeout. |
 | `write_timeout_seconds` | `10.0` | Request write timeout. |
@@ -69,7 +76,7 @@ rather than per-module wishful thinking.
 | `backoff_base_seconds` | `2.0` | Retry delay is `base ** attempt`, capped below. |
 | `backoff_max_seconds` | `120.0` | Ceiling on a retry delay. An explicit `Retry-After` may raise the delay above the computed value. |
 | `jitter_seconds` | `0.75` | Uniform random addition to the interval, to de-synchronise request timing. |
-| `challenge_backoff_seconds` | `45.0` | Base wait after an access-control challenge; the nth consecutive challenge waits `45 × 2^(n-1)`. |
+| `challenge_backoff_seconds` | `60.0` | Base wait after an access-control challenge; the nth consecutive challenge waits `60 × 2^(n-1)` — 60 s, 120 s, 240 s. |
 | `max_consecutive_challenges` | `4` | After this many challenges in a row the run raises `ChallengeWall` and **stops requesting** rather than hammering the source. |
 | `max_requests_per_run` | `1200` | Hard ceiling on live requests in one run. Exceeding it fails the fetch with `budget_exhausted`. Protects the source and us. |
 | `user_agent` | `RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)` | Honest and identifiable, linking to the project rather than a personal address. Also used by the browser step, so both transports make the same claim about who we are. |
@@ -78,8 +85,8 @@ rather than per-module wishful thinking.
 | `max_response_bytes` | `26214400` (25 MiB) | Ceiling for a page. A larger response is stored as an explicit `capture_state='partial'` prefix with a recorded coverage exception — never silently truncated and called complete. |
 | `max_resource_bytes` | `52428800` (50 MiB) | Ceiling for a linked document. Exceeding it yields resource outcome `too_large`. |
 | `max_redirects` | `5` | Redirects are followed **manually** so every hop is guarded and preserved as evidence. |
-| `allowed_hosts` | `["jobs.rowan.edu", "careers-static.pageuppeople.com"]` | The only hosts a connection may be opened to. Exact matches; subdomains are not implied. Every URL, including every redirect target, is checked before a socket is opened (`src/rowanjobs/net/guard.py`). |
-| `allow_subdomains` | `true` | Match subdomains of `allowed_hosts`, so a job document on `engineering.rowan.edu` is reachable. |
+| `allowed_hosts` | `["jobs.rowan.edu", "careers-static.pageuppeople.com", "rowan.edu"]` | The only hosts a connection may be opened to. Every URL, including every redirect target, is checked before a socket is opened (`src/rowanjobs/net/guard.py`). `rowan.edu` is reachable only for job documents linked from inside an advertisement; no Rowan page is requested for any other reason. |
+| `allow_subdomains` | `true` | Also match subdomains of the `allowed_hosts` entries, so a job document on `engineering.rowan.edu` or `sites.rowan.edu` is reachable. With `false`, only exact host matches are permitted. |
 
 ## `[browser]` — optional challenge step
 
@@ -110,7 +117,7 @@ and backed off. No stealth plugins, no proxy rotation, no CAPTCHA solving. See
 | `comparability_group` | `v1-unfiltered-en-us` | Absence history is only comparable within one group. **Bump this whenever the collected scope changes.** |
 | `verification_scan` | `true` | Perform the second complete listing traversal (step 4). |
 | `reconciliation_scan` | `true` | Perform a third bounded traversal when the first two disagree (step 6). |
-| `collect_resources` | `true` | Fetch job-specific documents linked from the description. |
+| `collect_resources` | `true` | Fetch the job-specific documents an advertisement links to, when they are on Rowan's own domain (`extract/pageup_detail.py::classify_link`). Links are classified and recorded either way. |
 | `terminal_observations_before_weekly` | `3` | Consecutive *terminal* observations before an unlisted posting moves to the weekly recheck tier. Uncertain outcomes never advance this. |
 | `weekly_recheck_interval_days` | `7` | Recheck interval in the weekly tier. |
 | `max_historical_rechecks_per_run` | `120` | Ceiling on historical (unlisted) rechecks per run. Deferred rechecks are recorded as a `historical_recheck_deferred` coverage gap, not silently skipped. |
@@ -134,7 +141,7 @@ See `docs/BACKUP_RESTORE.md`.
 | `keep_daily` | `7` | Daily snapshots retained. |
 | `keep_weekly` | `4` | Weekly snapshots retained (one per ISO week). |
 | `keep_monthly` | `12` | Monthly snapshots retained (one per calendar month). |
-| `verify_after_backup` | `true` | Run `integrity_check` and `foreign_key_check` on the snapshot before promoting it to final. A snapshot that fails is kept as `.db.unverified` and reported as `FAILED`. |
+| `verify_after_backup` | `true` | Run `integrity_check` and `foreign_key_check` on the snapshot before promoting it to final. A snapshot that fails is kept as `.db.unverified` and reported as `FAILED`. With this **off**, the snapshot is reported `UNVERIFIED` (not `VERIFIED`): it does not count as protection, cannot displace an older verified snapshot in rotation, and is not chosen as the `latest` restore source. |
 | `restore_check_interval_days` | `7` | How often a **full restore-and-query verification** is performed. |
 | `offhost_kind` | `""` | `""` (none), `"rclone"`, `"rsync-ssh"` or `"command"`. Empty means **no off-host protection is configured**, and protection is reported `UNCONFIGURED` rather than assumed. |
 | `offhost_target` | `""` | Destination prefix, e.g. an rclone remote or an `rsync` target. |
@@ -178,7 +185,7 @@ db_path   = "~/.local/share/rowanjobs/rowanjobs.db"
 concurrency            = 1
 # The source's WAF challenged the audit after roughly seven requests in about
 # ninety seconds (docs/SOURCE_ADAPTER_AUDIT.md). Pace conservatively.
-min_interval_seconds   = 1.5
+min_interval_seconds   = 2.5
 jitter_seconds         = 0.75
 
 connect_timeout_seconds = 10.0
@@ -191,9 +198,9 @@ max_retries          = 3
 backoff_base_seconds = 2.0
 backoff_max_seconds  = 120.0
 
-# After a challenge: wait 45s, then 90s, then 180s... and stop after four in a
+# After a challenge: wait 60s, then 120s, then 240s... and stop after four in a
 # row rather than hammering the source.
-challenge_backoff_seconds = 45.0
+challenge_backoff_seconds = 60.0
 max_consecutive_challenges = 4
 
 # Hard ceiling on live requests in one run.
@@ -212,9 +219,11 @@ max_resource_bytes = 52428800   # 50 MiB
 # Redirects are followed manually so every hop is guarded and archived.
 max_redirects = 5
 
-# The only hosts a socket may be opened to. Exact match; subdomains are not
-# implied. Checked again on every redirect target.
-allowed_hosts  = ["jobs.rowan.edu", "careers-static.pageuppeople.com"]
+# The only hosts a socket may be opened to. Checked again on every redirect
+# target. "rowan.edu" is reachable only for job documents linked from inside an
+# advertisement; no Rowan page is ever requested otherwise.
+allowed_hosts  = ["jobs.rowan.edu", "careers-static.pageuppeople.com", "rowan.edu"]
+# Match subdomains of the entries above (engineering.rowan.edu, sites.rowan.edu).
 allow_subdomains = true
 
 

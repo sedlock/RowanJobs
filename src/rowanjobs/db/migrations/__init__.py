@@ -18,6 +18,7 @@ from . import (
     m0003_comparison_lineage,
     m0004_availability_guard,
     m0005_resource_links_per_extraction,
+    m0006_availability_update_guard,
 )
 
 Migration = tuple[int, str, Callable[[Database], None]]
@@ -28,6 +29,7 @@ MIGRATIONS: list[Migration] = [
     (3, "comparison_lineage", m0003_comparison_lineage.upgrade),
     (4, "availability_guard", m0004_availability_guard.upgrade),
     (5, "resource_links_per_extraction", m0005_resource_links_per_extraction.upgrade),
+    (6, "availability_update_guard", m0006_availability_update_guard.upgrade),
 ]
 
 SCHEMA_VERSION = max(v for v, _, _ in MIGRATIONS)

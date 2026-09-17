@@ -270,15 +270,20 @@ def test_the_availability_guard_matches_the_documented_states(db) -> None:
     """
     from rowanjobs.constants import AVAILABILITY_STATES
 
-    sql = db.scalar(
-        "SELECT sql FROM sqlite_master WHERE type='trigger' "
-        "AND name='trg_observation_availability_insert'"
+    triggers = db.query(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
+        "AND name LIKE 'trg_observation_availability_%' ORDER BY name"
     )
-    assert sql, "the availability guard trigger must exist"
-    for state in AVAILABILITY_STATES:
-        assert f"'{state}'" in sql, f"{state} is not covered by the guard"
-    quoted = re.findall(r"'([a-z_]+)'", str(sql))
-    assert set(quoted) - {"unknown availability_state"} == set(AVAILABILITY_STATES)
+    assert {t["name"] for t in triggers} == {
+        "trg_observation_availability_insert",
+        "trg_observation_availability_update",
+    }, "both directions must be guarded"
+    for trigger in triggers:
+        sql = str(trigger["sql"])
+        for state in AVAILABILITY_STATES:
+            assert f"'{state}'" in sql, f"{state} is not covered by {trigger['name']}"
+        quoted = re.findall(r"'([a-z_]+)'", sql)
+        assert set(quoted) - {"unknown availability_state"} == set(AVAILABILITY_STATES)
 
 
 def test_an_unknown_availability_state_is_rejected(db) -> None:

@@ -8,7 +8,8 @@ This document is the specification. The implementation is
 `src/rowanjobs/extract/text.py`; supporting pieces are
 `src/rowanjobs/extract/decode.py` (bytes → text),
 `src/rowanjobs/extract/slicing.py` (byte-exact markup slices) and
-`src/rowanjobs/extract/fingerprint.py` (the comparison contract).
+`src/rowanjobs/extract/fingerprint.py` (the fingerprints and the comparison
+lineage).
 
 **Changing any rule below requires bumping `TEXT_CONTRACT_VERSION.`** Doing so
 produces new `extractions` rows rather than rewriting old ones, so a parser
@@ -210,12 +211,21 @@ When the balancing tag is found, `Slice.exact` is true and
 slice of the decoded source document**. That is what `source-substring` claims,
 and nothing else claims it.
 
+The label is only applied after the slice has been **checked against the parsed
+element**. `find_by_id` scans raw markup, so a script or a comment containing
+`<div id="job-details">` could match something other than the element lxml
+resolved. `pageup_detail.py::_slice_matches_node` renders the candidate slice
+with `html_string_to_text` and compares it, ignoring whitespace, with the text of
+the node the parser used; if they differ — or the slice will not parse at all —
+the extraction falls back to `reserialized`. `source-substring` is therefore
+never a claim the archive has not verified.
+
 ### `reserialized` — the honest fallback
 
 If the scanner cannot resolve the element's boundaries (no balancing tag before
-the end of the document, or the element could not be located), the parser falls
-back to `inner_html(node)`, which re-serialises the element's children with
-lxml. The result is semantically equivalent but **not byte-identical**: attribute
+the end of the document, or the element could not be located), or the resolved
+slice does not match the parsed element, the parser falls back to
+`inner_html(node)`, which re-serialises the element's children with lxml. The result is semantically equivalent but **not byte-identical**: attribute
 order, quoting and empty-element syntax may differ.
 
 That case is labelled `reserialized` and a warning is recorded on the extraction
@@ -243,14 +253,27 @@ unaffected, making the cause visible.
 
 `src/rowanjobs/extract/fingerprint.py`. All are SHA-256 over
 unit-separator-delimited (`\x1f`) UTF-8 parts, and every one of them is
-**namespaced with its contract version**.
+**namespaced with the contract that governs it**.
 
 | Fingerprint | Column | Inputs |
 |---|---|---|
 | `description_text` | `posting_versions.description_text_fingerprint` | `"text"`, `TEXT_CONTRACT_VERSION`, the rendered text |
 | `description_html` | `posting_versions.description_html_fingerprint` | `"html"`, `CONTRACT_VERSION`, the description markup |
 | `metadata` | `posting_versions.metadata_fingerprint` | `"metadata"`, `CONTRACT_VERSION`, the canonical JSON of the ordered labelled fields |
-| `content` | `posting_versions.content_fingerprint` | `"content"`, `CONTRACT_VERSION`, the title, then the three fingerprints above |
+| `content` | `posting_versions.content_fingerprint` | `"content"`, the **comparison lineage** `parser\|contract\|text_contract` (`comparison_lineage()`), the title, then the three fingerprints above |
+
+`comparison_lineage()` is the identity of the *interpretation* as opposed to the
+content: `PARSER_VERSION`, `CONTRACT_VERSION` and `TEXT_CONTRACT_VERSION`
+joined by `|`. Folding it into the content fingerprint is what makes an upgraded
+reading start a parallel line of versions instead of appearing to change the old
+one.
+
+Each helper takes its version argument as `None` and reads the module constant
+**at call time** (`import rowanjobs; rowanjobs.CONTRACT_VERSION`) rather than
+binding it as a default argument. A default argument is evaluated once at import,
+which would freeze the version a test — or a future caller that patches a
+constant — is trying to change, and produce fingerprints stamped with a version
+that was not in force.
 
 A fifth hash exists but belongs to the archive rather than to the comparison
 contract: `artifacts.sha256`, the **payload** fingerprint, computed over the
@@ -278,7 +301,7 @@ the list is not re-sorted).
 **Derived normalisations are excluded** (`normalized_json`, parsed dates). That
 is deliberate: improving the normaliser must never look like a source edit.
 
-## How the comparison contract stops a parser upgrade looking like a source edit
+## How the comparison lineage stops a parser upgrade looking like a source edit
 
 Four mechanisms, all of which have to hold:
 
@@ -288,28 +311,55 @@ Four mechanisms, all of which have to hold:
    same artifact; the old interpretation is never rewritten
    (`m0001_initial.py`).
 
-2. **Fingerprints are namespaced with the contract version.** The version string
-   is hashed into the digest itself, so the same text under two text contracts
-   produces two different `description_text_fingerprint` values — they can never
-   be accidentally equal, and they can never be accidentally compared.
+2. **Fingerprints are namespaced with the contract that governs them.** The
+   version string is hashed into the digest itself, so the same text under two
+   text contracts produces two different `description_text_fingerprint` values —
+   they can never be accidentally equal, and they can never be accidentally
+   compared. `content_fingerprint` goes further and hashes in the whole
+   comparison lineage.
 
-3. **Versions are only compared within one `contract_version`.**
-   `posting_versions` is unique on `(posting_id, contract_version,
-   content_fingerprint)`, and the change detector explicitly filters the previous
-   version by `v.contract_version = ?` with the *current* `CONTRACT_VERSION`
-   (`src/rowanjobs/collect/events.py::_record_content_events`). A version from a
-   different contract is invisible to the comparison, so it cannot produce a
-   spurious `content_changed` event.
+3. **Versions are only compared within one comparison lineage.** The lineage is
+   `(parser_version, contract_version, text_contract_version)`;
+   `posting_versions.parser_version` records the first of those (migration 3)
+   and `content_fingerprint` folds all three in. The change detector filters the
+   previous supporting observation's version by all three — `v.contract_version
+   = ?`, `v.text_contract_version = ?` and `COALESCE(v.parser_version, ?) = ?`
+   with the values currently in force
+   (`src/rowanjobs/collect/events.py::_record_content_events`) — and stamps the
+   lineage into the event's `evidence_json`. A version from another lineage is
+   invisible to the comparison, so it cannot produce a spurious `content_changed`
+   event.
 
-4. **Reprocessing keeps the original observation time.**
-   `src/rowanjobs/reprocess.py` re-parses archived payloads only, makes no
-   network request, and passes the **original** `observed_at_utc` when ensuring a
-   version — it did not observe anything, it reinterpreted stored evidence. The
-   report says so explicitly.
+   Scoping by `contract_version` alone was not sufficient, and the failure was
+   not hypothetical: a `TEXT_CONTRACT_VERSION` bump changed the text fingerprint,
+   and therefore the content fingerprint, *inside the same comparison scope*, so
+   the next collection recorded a `content_changed` event for an advertisement
+   nobody had edited.
 
-The practical result: bumping `TEXT_CONTRACT_VERSION` or `CONTRACT_VERSION` and
-running `rowanjobs reprocess` starts a parallel line of extractions and versions
-alongside the old one. The old line remains queryable and still means what it
-meant. `rowanjobs diff` compares within the highest contract version present for
-that posting and prints the note that a parser upgrade cannot appear there as a
-source edit.
+4. **Reprocessing keeps the original observation time, and leaves observations
+   pointing where they pointed.** `src/rowanjobs/reprocess.py` re-parses archived
+   payloads only, makes no network request, and passes the **original**
+   `observed_at_utc` when ensuring a version — it did not observe anything, it
+   reinterpreted stored evidence. The report says so explicitly.
+
+   Relinking is **opt-in**: `reprocess_details(relink=...)` defaults to `False`,
+   exposed as `rowanjobs reprocess --relink` (there is no `--no-relink`; the flag
+   used to be that way round and defaulted to relinking). Relinking issues an
+   `UPDATE` against `posting_observations`, rewriting `extraction_id` and
+   `posting_version_id` — the only operation in the project that mutates an
+   evidence row. What it destroys is the record of *which interpretation an
+   observation was originally made under*, which is exactly the question this
+   document exists to keep answerable. It is not needed to suppress spurious
+   change events: mechanism 3 already does that. When it is used, it rewrites
+   only observations whose linked version belongs to a different
+   `contract_version`, and the count is reported as `observations_relinked`.
+
+The practical result: bumping `PARSER_VERSION`, `TEXT_CONTRACT_VERSION` or
+`CONTRACT_VERSION` and running `rowanjobs reprocess` starts a parallel line of
+extractions and versions alongside the old one. The old line remains queryable
+and still means what it meant. `rowanjobs diff` restricts itself to the lineage
+of the **most recently seen** version for that posting (ordered by
+`first_seen_at_utc`, not by version string — which would sort `10.0.0` before
+`9.0.0`), reports that lineage as `comparison_lineage` in its JSON, and prints
+the note that a parser or contract upgrade cannot appear there as a source
+edit.

@@ -23,7 +23,7 @@ treats any two of them as interchangeable is wrong.
 | **First / last successful observation** | `postings.first_discovered_at_utc`; `v_posting_current.last_captured_at_utc`, `last_listed_at_utc`, `last_seen_any_scan_at_utc` | When *we* first and last actually saw the thing. Bounded by our own schedule, never by the source's calendar. |
 | **Qualified observations of absence** | `presence_events` rows with `event_kind='absent_qualified'`, `interval_start_utc` / `interval_end_utc` / `slot_local_date` | When a scan that *passed every completeness check* did not contain the advertisement. |
 | **Source retrieval timestamps** | `fetches.started_at_utc` / `ended_at_utc`; `posting_observations.observed_at_utc`; `resource_observations.observed_at_utc` | When bytes were requested from the source. `posting_observations.observed_at_utc` is the **start of the retrieval**. A linked document has its **own** retrieval time, independent of its parent page. |
-| **Extraction / reprocessing timestamps** | `extractions.extracted_at_utc` | When a parser ran over archived bytes. This is *not* an observation of the source. Offline reprocessing produces new extraction times while leaving `observed_at_utc` untouched (`src/rowanjobs/reprocess.py`). |
+| **Extraction / reprocessing timestamps** | `extractions.extracted_at_utc` | When a parser ran over archived bytes. This is *not* an observation of the source. Offline reprocessing produces new extraction times while leaving `observed_at_utc` untouched (`src/rowanjobs/reprocess.py`), and by default leaves each observation pointing at the extraction and version it was originally made under — see §11. |
 | **Scheduled slots vs. actual attempts** | `collection_runs.scheduled_slot_utc`, `scheduled_slot_local_date` vs. `started_at_utc`, `ended_at_utc`, `attempt_no`, `parent_run_id` | The *slot* is the intended daily moment. The *attempt* is what actually happened, possibly hours later, possibly more than once. |
 
 Storage format: every timestamp is UTC, ISO-8601, `Z`-suffixed, second precision
@@ -43,6 +43,15 @@ placeholder; precision is therefore `date`, `parsed_utc` is left **null**, and a
 note records that the machine value is the source's own placeholder and must not
 be reported as a published time. A date-only value stays date-only. Nothing here
 invents a midnight.
+
+A display the adapter cannot read at all — "Ongoing", "September 2026" — keeps
+`source_precision = "unknown"`, `date_parse_state = "unparsed"` and a **null**
+`parsed_utc`, with a note that the machine value is not interpretable as a
+published time. It is not promoted to minute precision on the strength of the
+`<time datetime>` attribute: that attribute may be a placeholder, and publishing
+a precise instant from it would invent a deadline the source never displayed.
+The display text and the machine value are both kept, so a later reader can make
+their own judgement.
 
 ---
 
@@ -87,7 +96,20 @@ read as positive evidence of what it did see.
 - If the discovery and verification traversals disagree on the identifier *set*
   and a bounded reconciliation traversal does not settle it, the run records a
   `listing_set_unreconciled` coverage gap and again suppresses absence analysis
-  (`src/rowanjobs/collect/runner.py::_collect`).
+  (`src/rowanjobs/collect/runner.py::_collect`). A reconciliation traversal
+  settles the disagreement only if it **qualifies *and* agrees** with the
+  discovery or the verification set; which one it matched is recorded in
+  `set_comparison["reconciliation_agrees_with"]`. Qualifying is not agreeing: a
+  third traversal reporting a third different set has settled nothing, and
+  treating it as settled would let the run conclude that an advertisement a
+  qualified scan listed minutes earlier was absent.
+- **Absence may never contradict evidence from the same run.** If any qualified
+  traversal in the run listed an advertisement, no `absent_qualified` event is
+  emitted for it, even when the authoritative final traversal omits it; a
+  `listing_disagreement_within_run` coverage gap is recorded instead
+  (`collect/events.py::derive_for_run`, given the run's
+  `listed_in_any_qualified_scan` set). The honest reading within one run is "it
+  was there when we looked", not "it was gone by the last look".
 - Two matching traversals are **consistency evidence, not proof the source held
   still**. The run records that caveat verbatim in `coverage_json`.
 - The authoritative listing set for a run is the **last qualified** traversal
@@ -105,7 +127,7 @@ read as positive evidence of what it did see.
 | State | What it asserts |
 |---|---|
 | `content_captured` | A real advertisement body was retrieved. Substantive. |
-| `explicit_closure` | The source displayed a closed/unavailable template. Terminal. |
+| `explicit_closure` | The page carried **no advertisement body** and said it was closed or unavailable. Terminal. |
 | `not_found` | The source returned a definite not-found. Terminal. |
 | `redirected_to_listing` | The detail URL bounced to the general listing. Terminal. |
 | `redirected_to_other_job` | The detail URL bounced to a **different** advertisement. Conflict. |
@@ -127,6 +149,26 @@ content is preserved but is **not assigned to the expected posting**, and the
 disagreement is written to `conflicts_json` unresolved. Reconciling it into one
 "correct" value would invent a fact the source never published.
 
+### A closure notice beside a live advertisement is a conflict, not a closure
+
+`explicit_closure` requires the *absence* of an advertisement body. A page that
+shows both a closure-like notice **and** a complete body contradicts itself, so
+the observation stays `content_captured`, the description is kept, and a
+`closure_signal_with_content` entry is added to `conflicts_json` unresolved
+(`src/rowanjobs/collect/details.py`). Treating it as a closure would discard the
+description and assert something the page did not say.
+
+The detector is correspondingly careful about where it looks
+(`extract/pageup_detail.py::_closure_signal`). It does **not** read the
+advertisement body: employers' own prose routinely contains phrases like "no
+longer available" or "has been filled", and matching inside the description
+would declare a live, listed advertisement closed. It searches the job container
+*outside* the description, plus `#message-list` — and `#message-list` must
+actually match the closure vocabulary. That element is a permanently present,
+normally empty list on this source; treating any non-empty text there as closure
+would let a session notice or a cookie banner flip every advertisement in the
+archive to "closed" in a single run.
+
 ### Content freshness
 
 `v_posting_current.content_freshness` carries the same distinction into the
@@ -134,10 +176,17 @@ projection layer:
 
 | Value | Meaning |
 |---|---|
+| `never-captured` | No content has ever been captured |
+| `carried-forward-uncertain` | Content exists, and the most recent check was a challenge or a retrieval failure |
 | `checked` | The most recent observation is the one that produced this content |
 | `carried-forward` | The content predates the most recent check, which produced no content |
-| `carried-forward-uncertain` | The most recent check was a challenge or a retrieval failure |
-| `never-captured` | No content has ever been captured |
+
+The `CASE` is evaluated in that order, so `never-captured` wins over
+`carried-forward-uncertain`: there is nothing to carry forward for a posting that
+has never yielded content. The subquery supplying the content also requires
+`identity_state = 'match'`, the same condition `v_last_captured` applies, so the
+two views cannot disagree about whether content was ever captured
+(`src/rowanjobs/db/migrations/m0002_views.py`).
 
 **Previously stored content must never be reported as freshly retrieved.** Every
 export carries `content_freshness`, and `rowanjobs show` prints it.
@@ -191,7 +240,10 @@ quietly treated as further consecutive absences, and they are not filled in.
 Identical content re-observed later reuses the existing `posting_versions` row —
 the table is unique on `(posting_id, contract_version, content_fingerprint)` and
 `Repository.ensure_posting_version` returns the existing id when the fingerprint
-matches.
+matches. "Identical" means identical *under one comparison lineage*: the
+fingerprint hashes in `(parser_version, contract_version,
+text_contract_version)`, so the same bytes read by a different parser version
+produce a different fingerprint and a parallel version, never an apparent edit.
 
 So a posting that reads A on Monday, B on Tuesday and A again on Wednesday has:
 
@@ -283,3 +335,31 @@ onto every presence event. Absence history is only comparable **within one
 group**. If the collected scope ever changes — a different locale, a filtered
 listing, a different definition of what is in scope — the group must change too,
 and absence series must not be joined across the boundary.
+
+## 11. Reprocessing re-reads; it does not re-observe, and it does not relink
+
+`rowanjobs reprocess` re-parses **archived payloads only**. It opens no socket,
+so it cannot create an observation or a retrieval time, and it passes the
+**original** `observed_at_utc` when ensuring a version: it did not observe
+anything, it reinterpreted stored evidence (`src/rowanjobs/reprocess.py`).
+
+What it does **not** do by default is move an existing observation.
+`posting_observations.extraction_id` and `posting_version_id` record the
+interpretation that observation was made under *at the time it was made*, and
+that is a fact about the past like any other in this archive.
+
+`--relink` is **opt-in** (`reprocess_details(relink=False)` is the default; the
+flag used to be `--no-relink`, which meant relinking happened unless you asked it
+not to). It issues an `UPDATE` against `posting_observations`, rewriting both
+columns to point at the new reading. It is the only operation in the project
+that mutates an evidence row, and what it destroys is the answer to *"which
+reading of the page was this observation recorded under?"* — precisely the
+question this document exists to keep answerable.
+
+It is not needed to suppress spurious `content_changed` events: comparison
+lineage scoping already does that (§5 above and
+`docs/EXTRACTION_CONTRACT.md`). When it is used, only observations whose linked
+version belongs to a different `contract_version` are rewritten, and the count
+is reported as `observations_relinked` in the reprocess report. Any analysis
+that spans a relinked archive must treat those observations as re-attributed,
+because the archive no longer records what they originally said.

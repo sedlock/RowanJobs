@@ -9,9 +9,11 @@ prose change, or only a metadata field?" without re-reading every archived page:
 ``metadata``     SHA-256 of the ordered, labelled source fields
 ``content``      SHA-256 over the three above plus the title
 
-Every fingerprint is namespaced with its contract version. Two versions are only
-ever compared when their contract versions match, which is what stops a parser
-upgrade from being recorded as a website edit.
+Every fingerprint is namespaced with the version that governs it, and ``content``
+folds in the whole comparison lineage -- parser version, comparison contract and
+text contract. Two versions are only ever compared when that lineage matches,
+which is what stops a parser or contract upgrade from being recorded as a
+website edit.
 """
 
 from __future__ import annotations

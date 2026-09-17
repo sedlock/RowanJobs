@@ -351,7 +351,7 @@ challenge at 21:43:01Z.
   check, so the scan does not qualify and the run's absence analysis is
   suppressed.
 - The budget widens the inter-request interval by 1.6× per challenge (capped at
-  30 s), waits `challenge_backoff × 2^(n-1)` (45 s, 90 s, 180 s, …), and raises
+  30 s), waits `challenge_backoff × 2^(n-1)` (60 s, 120 s, 240 s, …), and raises
   `ChallengeWall` after `max_consecutive_challenges` (default 4) — the run stops
   requesting rather than hammering the source.
 
@@ -373,7 +373,7 @@ repeatedly triggering the challenge. Collection still works without it, by
 backing off.
 
 The audit's observed threshold (about seven requests in about ninety seconds) is
-why `network.min_interval_seconds` defaults to 1.5 s with up to 0.75 s of
+why `network.min_interval_seconds` defaults to 2.5 s with up to 0.75 s of
 jitter, and why `network.concurrency` is 1.
 
 ## What browser rendering is and is not needed for

@@ -1,8 +1,12 @@
 # Data dictionary
 
-Every table and view created by
-`src/rowanjobs/db/migrations/m0001_initial.py` (schema v1, the evidence model)
-and `src/rowanjobs/db/migrations/m0002_views.py` (schema v2, the projections).
+Every table and view created by the migrations in
+`src/rowanjobs/db/migrations/`: `m0001_initial.py` (schema v1, the evidence
+model), `m0002_views.py` (schema v2, the projections),
+`m0003_comparison_lineage.py` (v3, `posting_versions.parser_version`),
+`m0004_availability_guard.py` (v4, the `availability_state` trigger) and
+`m0005_resource_links_per_extraction.py` (v5, `resource_links` rebuilt per
+extraction).
 
 Enumerated values come from `src/rowanjobs/constants.py`; where the migration
 also encodes them as a `CHECK` constraint that is noted, because the two must
@@ -46,7 +50,7 @@ numbered migrations.
 | Column | Meaning |
 |---|---|
 | `version` | Migration number, primary key |
-| `name` | Migration name (`initial`, `views`) |
+| `name` | Migration name (`initial`, `views`, `comparison_lineage`, `availability_guard`, `resource_links_per_extraction`) |
 | `applied_at_utc` | When it was applied |
 
 ## `sources`
@@ -102,7 +106,7 @@ One row per collection attempt. Mutable: opened at start, heartbeated, closed.
 | `sqlite_runtime_json` | The SQLite runtime evidence for this run (`db/runtime.py::RuntimeInfo`) |
 | `started_at_utc`, `ended_at_utc` | Run boundaries; `ended_at_utc` null means in progress |
 | `heartbeat_at_utc` | Advanced periodically during a long harvest |
-| `outcome` | `success`, `partial`, `failed`, `aborted`, `lock_contention` (`RUN_OUTCOMES`, `CHECK`); null while running |
+| `outcome` | `success`, `partial`, `failed`, `aborted`, `lock_contention` (`RUN_OUTCOMES`, `CHECK`); null while running. `partial` covers any coverage exception, **including queued detail retrievals left `pending`/`in_progress`** — a bounded (`--max-details`) or interrupted pass did not cover what it discovered, so it never reports `success` (`collect/runner.py::_outcome`) |
 | `outcome_detail` | Prose reason, e.g. which coverage exceptions occurred |
 | `counts_json` | Per-run counters: listing scans/pages, detail attempted/captured/failed/uncertain, versions created, events, budget stats, queue summary |
 | `errors_json` | Structured errors encountered |
@@ -317,28 +321,36 @@ Indexes: `(scan_id, section)`, `(posting_id, observed_at_utc)`,
 
 ## `posting_versions`
 
-One distinct state of an advertisement's content, under one comparison contract.
-Identical content re-observed tomorrow reuses today's row — so a history of
-A → B → A is **three observations across two versions**.
+One distinct state of an advertisement's content, under one **comparison
+lineage** — the triple `(parser_version, contract_version,
+text_contract_version)`. Identical content re-observed tomorrow reuses today's
+row — so a history of A → B → A is **three observations across two versions**.
 
 | Column | Meaning / permitted values |
 |---|---|
 | `posting_version_id` | Primary key |
 | `posting_id` | → `postings` |
+| `parser_version` | `PARSER_VERSION` that produced this reading (added by migration 3; backfilled on existing rows). Part of the comparison lineage |
 | `contract_version` | `CONTRACT_VERSION` that defined "different" here |
 | `text_contract_version` | `TEXT_CONTRACT_VERSION` that produced `description_text` |
-| `content_fingerprint` | The composite fingerprint: title + the three below |
+| `content_fingerprint` | The composite fingerprint: the comparison lineage, the title, and the three fingerprints below (`extract/fingerprint.py::content_fingerprint`). Because the lineage is hashed in, a version produced under a different parser or contract can never collide with this one |
 | `description_text_fingerprint` | Fingerprint of the readable text |
 | `description_html_fingerprint` | Fingerprint of the description markup |
 | `metadata_fingerprint` | Fingerprint of the ordered, labelled source fields |
 | `title` | The advertisement heading, verbatim |
 | `description_html` | The advertisement body markup |
-| `description_html_kind` | `source-substring` (a byte-for-byte slice of the archived document), `reserialized` (rebuilt by the parser; semantically equivalent but **not** byte-identical), or `absent` (`CHECK`) |
+| `description_html_kind` | `source-substring` (a byte-for-byte slice of the archived document, and only after the slice has been rendered and compared with the parsed element — `pageup_detail.py::_slice_matches_node`), `reserialized` (rebuilt by the parser; semantically equivalent but **not** byte-identical), or `absent` (`CHECK`) |
 | `description_text` | The body rendered under the verbatim text contract |
 | `first_seen_at_utc` | When this content state was first observed |
 | `first_extraction_id`, `first_run_id` | Provenance of the first sighting |
 
-Unique on `(posting_id, contract_version, content_fingerprint)`.
+Unique on `(posting_id, contract_version, content_fingerprint)`, and
+`idx_versions_lineage` indexes `(posting_id, parser_version, contract_version,
+text_contract_version, first_seen_at_utc)`. Because the lineage is folded into
+`content_fingerprint`, a parser or text-contract bump produces a **parallel line
+of versions** rather than an apparent edit of the existing one: the change
+detector, `rowanjobs diff` and the uniqueness constraint all agree about which
+versions are comparable (`src/rowanjobs/collect/events.py::_record_content_events`).
 
 ## `version_values`
 
@@ -359,10 +371,10 @@ stored **beside** the source value and never replaces it.
 | `known_label` | 1 when the adapter recognises the label; 0 means a *new source field* was preserved rather than lost |
 | `normalized_json` | Derived interpretation, e.g. multivalue split on `;`. **Locations are never split on commas** — "Glassboro, New Jersey" is one place. |
 | `date_parse_state` | `parsed`, `unparsed`, `invalid`, `absent` (`DATE_PARSE_STATES`, `CHECK`); null for non-date fields |
-| `source_precision` | What the *display* committed to: `date`, `minute`, `second`, `unknown` (`DATE_PRECISIONS`) |
+| `source_precision` | What the *display* committed to: `date`, `minute`, `second`, `unknown` (`DATE_PRECISIONS`). A display the parser does not recognise keeps `unknown` — it is never promoted to `minute` on the strength of the machine value |
 | `source_tz_text` | The timezone wording printed next to the value, e.g. `Eastern Daylight Time` |
 | `source_machine_value` | The `<time datetime="…">` attribute as published |
-| `parsed_utc` | Best-effort UTC interpretation, clearly derived. **Null when the display was date-only**, so a date-only value is never reported as an instant. |
+| `parsed_utc` | Best-effort UTC interpretation, clearly derived. **Null when the display was date-only**, so a date-only value is never reported as an instant, and **null when the display could not be read at all** (`date_parse_state='unparsed'`, `source_precision='unknown'`) — an unrecognised display such as "Ongoing" leaves the machine value uninterpreted rather than publishing an instant the source never showed (`src/rowanjobs/extract/dates.py`). |
 | `parsed_local_date` | The `America/New_York` calendar date implied |
 
 Unique on `(posting_version_id, field_key, ordinal, origin)`.
@@ -383,17 +395,23 @@ evidence table for presence over time.
 | `observed_at_utc` | **When the retrieval started** — the source-retrieval time, not the parse time |
 | `observed_external_job_id` | The identifier the page actually displayed |
 | `identity_state` | `match`, `mismatch`, `absent_on_page`, `not_observed` (`IDENTITY_STATES`, `CHECK`) |
-| `availability_state` | See the table below (`AVAILABILITY_STATES`) |
+| `availability_state` | See the table below (`AVAILABILITY_STATES`). Constrained in the database by `trg_observation_availability_insert` (migration 4), which mirrors `constants.AVAILABILITY_STATES` and aborts an insert carrying any other value; a test asserts the two stay in step |
 | `availability_detail` | Prose detail |
 | `redirect_class` | `none`, `to_listing`, `to_other_job`, `same_job_canonicalised`, `to_other` |
-| `extraction_id` | → `extractions` |
+| `extraction_id` | → `extractions`; the reading this observation was made under |
 | `posting_version_id` | → `posting_versions`; set only when content was captured |
 | `checked_because` | `listed`, `historical-daily`, `historical-weekly`, `manual` (`CHECK_REASONS`) |
-| `conflicts_json` | Disagreements preserved **unresolved**: job number in the label vs. in the span, a field presented more than once with different values, an identity mismatch. Nothing here is reconciled into one "correct" value. |
+| `conflicts_json` | Disagreements preserved **unresolved**: job number in the label vs. in the span, a field presented more than once with different values, an identity mismatch, and `closure_signal_with_content` — a page that showed both a closure-like notice and a complete advertisement body, where the content is kept and the notice preserved rather than the description being thrown away. Nothing here is reconciled into one "correct" value. |
 
 Deliberately **not** unique on `(posting_id, date)`: several observations per day
 are legitimate and all are preserved. Indexes: `(posting_id, observed_at_utc)`,
 `run_id`, `(expected_external_job_id, observed_at_utc)`.
+
+`extraction_id` and `posting_version_id` are the only *evidence* columns any
+tool rewrites, and only outside ingestion: `rowanjobs reprocess --relink`
+(opt-in, off by default) repoints them at a newer reading and thereby loses the
+record of which interpretation the observation was originally made under. See
+`docs/OBSERVATION_SEMANTICS.md` §11.
 
 ### `availability_state` values
 
@@ -411,15 +429,27 @@ are legitimate and all are preserved. Indexes: `(posting_id, observed_at_utc)`,
 `TERMINAL_AVAILABILITY` states are the only ones that advance the
 demotion streak towards weekly rechecking. Uncertainty never does.
 
+`explicit_closure` requires a page with **no advertisement body** plus a closure
+signal; a recognised page carrying no body and no such signal is `not_found`.
+A closure notice *alongside* a captured body is neither: the observation is
+`content_captured` and the contradiction is recorded in `conflicts_json`
+(`src/rowanjobs/collect/details.py`).
+
 ## `resource_links`
 
-Links found in an advertisement, with the decision about each.
+Links found in an advertisement, with the decision **this extraction** made
+about each. Rows are written on every content capture, not only when a version
+is created (`Repository.record_resource_links`): a link's classification belongs
+to the reading that produced it, so a widened collection scope is visible
+immediately instead of waiting for the advertisement's content to change.
+Extractions are deduplicated by `(artifact, parser, contracts)`, so an unchanged
+page re-observed tomorrow reuses the same extraction and adds no rows.
 
 | Column | Meaning / permitted values |
 |---|---|
 | `resource_link_id` | Primary key |
-| `posting_version_id` | → `posting_versions` |
-| `extraction_id` | → `extractions` |
+| `posting_version_id` | → `posting_versions`; the version this capture produced |
+| `extraction_id` | → `extractions`; the reading that classified the link, and the row's identity |
 | `parent_kind` | `posting_description` (inside the body) or `job_content` (elsewhere in the job container) |
 | `url_raw`, `url_resolved` | As published and as resolved against the page URL |
 | `link_text` | Anchor text, truncated to 300 characters |
@@ -430,9 +460,18 @@ Links found in an advertisement, with the decision about each.
 | `exclusion_reason` | Why it was excluded — recorded so a later question about what was *not* followed is answerable from the archive |
 | `first_seen_at_utc` | First sighting |
 
-Unique on `(posting_version_id, url_raw, position)`. In v1 only
-`job_document` links hosted on `jobs.rowan.edu` are fetched; application
-workflow links are **never** followed.
+Unique on `(extraction_id, url_raw, position)` since migration 5, which rebuilt
+the table (existing rows kept their ids and their original decisions). In v1 a
+link is fetched only when this extraction classified it `job_document` **and**
+it is hosted on Rowan's own domain — `rowan.edu` or any `*.rowan.edu` host
+(`extract/pageup_detail.py::classify_link`). A `job_document` on a third-party
+host is still recorded, with `collection_decision='exclude'` and the reason
+stored. Application workflow links are **never** followed.
+
+`DetailCollector._collect_resources` retrieves exactly the links this extraction
+marked `fetch` and looks the `resource_link_id` up by `(extraction_id,
+url_raw)`, so the stored classification and what was actually retrieved cannot
+disagree.
 
 ## `resource_observations`
 
@@ -499,7 +538,7 @@ How often a no-longer-listed posting is re-checked.
 | `posting_id` | Primary key, → `postings` |
 | `tier` | `daily` or `weekly` (`CHECK`) |
 | `consecutive_terminal_observations` | Streak of terminal outcomes. Reset by a listing appearance or a content capture; **not advanced by uncertainty** |
-| `last_checked_at_utc` | Last check |
+| `last_checked_at_utc` | Last check. Also the ordering key for historical rechecks: `_queue_historical` takes unlisted postings **least-recently-checked first**, so the tail of the list is reached instead of the same first `max_historical_rechecks_per_run` every run. `_update_recheck_policy` walks a run's observations chronologically, so this value cannot move backwards |
 | `next_due_at_utc` | When a weekly-tier posting is due again |
 | `reason` | Why it is in this tier, in prose |
 | `updated_at_utc` | Last update |
@@ -535,7 +574,7 @@ Written by `rowanjobs record-deployment`.
 | `last_run_id` | The highest run id present in the snapshot |
 | `artifact_count`, `posting_count` | Contents at snapshot time |
 | `file_bytes`, `sha256` | Size and checksum of the file |
-| `verification_state` | `OK`, `SKIPPED` or `FAILED` |
+| `verification_state` | `OK` (verified before promotion) or `SKIPPED` (`verify_after_backup = false`). A snapshot that fails verification is never promoted and never recorded here. **Only `OK` counts:** rotation may not drop an older snapshot on the strength of a `SKIPPED` one, and `latest()` — the restore source — selects `OK` only (`src/rowanjobs/ops/backup.py`) |
 | `verification_detail`, `verified_at_utc` | Verification outcome |
 | `offhost_state` | `UNCONFIGURED` (default), `VERIFIED`, `FAILED` — compare `PROTECTION_STATES` |
 | `offhost_target`, `offhost_detail` | Destination and result |
@@ -554,7 +593,7 @@ Written by `rowanjobs record-deployment`.
 | `interval_start_utc`, `interval_end_utc` | **The event happened somewhere inside this interval.** An exact event time is never manufactured; `interval_end_utc` is required, `interval_start_utc` may be null when there is no earlier bound. |
 | `slot_local_date` | The scheduled slot's `America/New_York` date — the key the two-day absence rule counts |
 | `comparability_group` | From the source config; absence history is only comparable within one group |
-| `evidence_json` | Why this event was emitted, including the qualification rules version and explanatory notes |
+| `evidence_json` | Why this event was emitted, including the qualification rules version and explanatory notes. For `content_changed` it carries the full comparison lineage (`parser_version`, `contract_version`, `text_contract_version`) the two versions shared |
 | `created_at_utc` | When derived |
 
 Unique index on `(posting_id, event_kind, rules_version, interval_end_utc,
@@ -567,7 +606,7 @@ Recorded whenever the collector cannot honestly claim complete coverage.
 | Column | Meaning |
 |---|---|
 | `coverage_gap_id` | Primary key |
-| `kind` | e.g. `no_qualified_discovery`, `listing_set_unreconciled`, `historical_recheck_deferred` |
+| `kind` | e.g. `no_qualified_discovery`, `listing_set_unreconciled`, `historical_recheck_deferred`, `listing_disagreement_within_run` (an advertisement listed by one qualified traversal but missing from the final one — recorded *instead of* an `absent_qualified` event, because absence may not contradict this run's own evidence) |
 | `scope` | `listing`, `detail`, … |
 | `run_id`, `scan_id`, `posting_id` | What it applies to |
 | `slot_local_date` | The affected slot date |
@@ -631,15 +670,22 @@ Current state per posting, with freshness and certainty as explicit columns.
 | `content_freshness` | `checked`, `carried-forward`, `carried-forward-uncertain`, `never-captured` — see below |
 | `version_count`, `observation_count` | History size |
 
+The `current_*` columns come from the most recent observation that produced a
+content version **and** whose `identity_state` is `match` — the same requirement
+`v_last_captured` applies — so the two views cannot disagree about whether
+content was ever captured.
+
 **`content_freshness` is the contract that prevents stored content from being
 reported as freshly retrieved:**
 
 | Value | Meaning |
 |---|---|
+| `never-captured` | No content has ever been captured for this posting. **Tested first**, because "carried forward" presupposes there is content to carry |
+| `carried-forward-uncertain` | Content exists, and the most recent check was `access_control_challenge` or `retrieval_failed`; we do not know the current state |
 | `checked` | The most recent observation is the one that produced this content |
 | `carried-forward` | The content predates the most recent check (which produced no content) |
-| `carried-forward-uncertain` | The most recent check was `access_control_challenge` or `retrieval_failed`; we do not know the current state |
-| `never-captured` | No content has ever been captured for this posting |
+
+The `CASE` in `m0002_views.py` is evaluated in that order.
 
 ## `v_posting_history`
 
@@ -705,6 +751,8 @@ artifacts ──< extractions ──> (listing_pages | listing_entries |
 Read it as: a run performs scans; a scan retrieves pages; a page yields row
 occurrences; a row occurrence names a posting. Separately, a run observes each
 posting's detail URL; an observation may produce a content version; a content
-version owns its labelled field values and its classified links. Every fetch
-points at the archived bytes, and every extraction points at the artifact it
-interpreted plus the parser and contract versions that interpreted it.
+version owns its labelled field values. Classified links hang off the
+**extraction** that read them (and carry the version they were captured
+alongside). Every fetch points at the archived bytes, and every extraction points
+at the artifact it interpreted plus the parser and contract versions that
+interpreted it.

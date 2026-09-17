@@ -70,9 +70,16 @@ With `verify_after_backup = true` (the default) the candidate snapshot is opened
 - `PRAGMA foreign_key_check` must return no rows;
 - the table count is recorded.
 
-`verification.state` is then `OK`; with verification disabled it is `SKIPPED`,
-and the backup is reported `VERIFIED` but the manifest records honestly that
-verification was skipped.
+`verification.state` is then `OK` and the snapshot is reported `VERIFIED`.
+
+With `verify_after_backup = false` the manifest records `SKIPPED` and the result
+state is **`UNVERIFIED`** — not `VERIFIED`. A snapshot nobody checked is a file,
+not a guarantee, and calling it verified would be the archive asserting something
+it never established. `BackupResult.ok` is true only for `VERIFIED`, so
+`rowanjobs backup` exits 3 (protection degraded) in that case;
+`BackupResult.usable` is the separate, weaker statement that a snapshot exists
+at all. Only an `OK` snapshot counts for rotation or as the `latest()` restore
+source (below).
 
 ### When backups are taken
 
@@ -88,6 +95,10 @@ separately from 1 and 2.
 
 `BackupManager.prune`, driven by `keep_daily` / `keep_weekly` / `keep_monthly`
 (defaults 7 / 4 / 12, all configurable).
+
+Only snapshots whose `verification_state` is `OK` count as verified here. An
+`UNVERIFIED`/`SKIPPED` snapshot can never be the reason an older verified one is
+dropped.
 
 Snapshots are considered newest-first. A snapshot is kept if it is:
 
@@ -116,7 +127,8 @@ rowanjobs --json backup               # machine-readable
 ```
 
 Output reports the state, the file, its sha256 and size, anything pruned, and
-the off-host state. Exit 0 if `VERIFIED`, otherwise 3 (protection degraded).
+the off-host state. Exit 0 if `VERIFIED`; `UNVERIFIED` (verification switched
+off) and `FAILED` both exit 3, protection degraded.
 
 ## Verifying
 
@@ -132,7 +144,9 @@ rowanjobs verify --restore            # ALSO restore the latest snapshot to a te
 2. `PRAGMA foreign_key_check` (reported as a violation count);
 3. every archived payload: decompress it and confirm it hashes back to its stored
    `sha256` (`src/rowanjobs/archive/store.py::verify_all`). A length mismatch
-   after decompression is also an error.
+   after decompression is also an error. The same check runs on **every** read:
+   `ArchiveStore.get` re-hashes what it decompressed before returning it, so a
+   corrupted payload raises rather than being handed to a parser or an export.
 
 With `--restore` it additionally performs the full restore check below and writes
 the outcome to `<data_root>/runtime/restore-verification.json`.
@@ -155,10 +169,17 @@ Safety properties:
   destination resolves to the configured database path, and `restore_to` refuses
   to overwrite any existing file (`FileExistsError`).
 - The copy is `chmod 0600`.
-- The copy is opened once with migrations **disabled**, to prove it opens
-  cleanly, before being handed back.
+- The copy is opened once **read-only**, to prove it opens cleanly, before being
+  handed back. Read-only matters: opening it read-write would leave `-wal`/`-shm`
+  sidecars beside it and the restored snapshot would stop being the single
+  self-contained file it was created as.
 - The restored file is then put through the same restore check as the periodic
-  verification and the per-check results are printed.
+  verification, in a temporary directory — `restore_check` writes its own working
+  copy, and dropping that next to the restore target would leave a stray database
+  behind — and the per-check results are printed.
+- Without `--source`, the snapshot restored is the most recent one whose
+  verification state is `OK` (`BackupManager.latest`); an unverified snapshot is
+  never selected silently.
 
 To actually put a restored snapshot into service, stop the timers, move the
 current archive aside (do not delete it), copy the restored file into place, and

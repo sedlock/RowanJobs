@@ -4,9 +4,6 @@ RowanJobs reads pages that any member of the public can read, at a pace that doe
 not burden the source, and treats everything it retrieves as untrusted input.
 This document states the policy and points at the code that enforces it.
 
-(`src/rowanjobs/config.py` refers to this material as
-`docs/SOURCE_ACCESS_POLICY.md`; it is this document.)
-
 ---
 
 ## 1. Public, unauthenticated collection only
@@ -16,8 +13,15 @@ RowanJobs requests exactly two families of public URL on `jobs.rowan.edu`:
 - `/en-us/listing/` and its `?page=N&page-items=20` variants;
 - `/en-us/job/<id>[/<slug>]` detail pages;
 
-plus job-specific documents linked from a description and hosted on
-`jobs.rowan.edu`, and `robots.txt`.
+plus job-specific documents linked from inside an advertisement and hosted on
+Rowan's own domain (`rowan.edu` or any `*.rowan.edu` host — the employer spreads
+these across `engineering.rowan.edu`, `sites.rowan.edu` and similar), and
+`robots.txt`.
+
+No Rowan page is requested for any other reason: reaching a `rowan.edu` URL
+requires an advertisement to have linked to a document, and
+`classify_link` to have classified it `job_document`. A `job_document` on a
+third-party host is recorded with its exclusion reason and **not** retrieved.
 
 It categorically does **not**:
 
@@ -25,7 +29,7 @@ It categorically does **not**:
 |---|---|
 | Create or use an applicant account | No credential handling exists anywhere in the codebase |
 | Submit an application, or follow an apply workflow | `classify_link` marks `apply-link`, `employee-referral-link`, `/apply/` and any `pageuppeople.com` host as `apply_workflow` with `collection_decision='exclude'` and the reason *"application submission workflow is never followed"* |
-| Use Rowan internal credentials or internal systems | The host allowlist is `jobs.rowan.edu` and `careers-static.pageuppeople.com`; nothing else can be contacted |
+| Use Rowan internal credentials or internal systems | The host allowlist is `jobs.rowan.edu`, `careers-static.pageuppeople.com` and `rowan.edu` (with `allow_subdomains = true`, so `*.rowan.edu` matches); nothing else can be contacted |
 | Send any authentication header | No `Authorization`, cookie jar seeding or API key is ever constructed. The only cookies the client ever holds are the WAF tokens described in §4 |
 | Collect applicant or personal data | Only published advertisement content is stored |
 
@@ -62,7 +66,7 @@ add an HTTP call that bypasses `SourceClient`.
 | Control | Default | Effect |
 |---|---|---|
 | `concurrency` | 1 | One request at a time; the budget serialises with a lock |
-| `min_interval_seconds` | 1.5 s | Minimum gap between requests |
+| `min_interval_seconds` | 2.5 s | Minimum gap between requests |
 | `jitter_seconds` | 0.75 s | Uniform random addition, so requests are not metronomic |
 | `max_requests_per_run` | 1200 | Hard per-run ceiling; exceeding it fails the fetch as `budget_exhausted` |
 | `Retry-After` | honoured | `honour_retry_after` pushes the next permitted time out |
@@ -73,6 +77,13 @@ add an HTTP call that bypasses `SourceClient`.
 The defaults were chosen against a measurement, not a guess: the audit tripped
 the source's WAF after roughly seven requests in about ninety seconds.
 
+The collector also identifies itself honestly. The default user agent is
+`RowanJobsArchiver/1.0 (+https://github.com/sedlock/RowanJobs)`: it names the
+software and links to the public repository, which is the stable way for a site
+operator to find out who we are and how to reach us. It deliberately carries **no
+personal email address** — it is sent to a third party on every request and
+written into every archived `fetches` row.
+
 ## 4. Access-control challenges: respect and back off
 
 `detect_access_control` (`src/rowanjobs/net/client.py`) classifies a response as
@@ -82,10 +93,12 @@ an access-control signal when it carries `x-amzn-waf-action` /
 `x-amzn-waf-action: challenge`, and an empty body**.
 
 The response to being challenged is to **slow down and, if it persists, stop**:
-widen the interval, wait 45 s → 90 s → 180 s, and raise `ChallengeWall` after four
-in a row. The observation is recorded as `access_control_challenge` — *collection
-uncertainty, never evidence of absence* — and the affected listing scan fails
-qualification, so nothing false is concluded from it.
+widen the interval (×1.6 per challenge, capped at 30 s), wait
+`challenge_backoff_seconds × 2^(n−1)` — 60 s → 120 s → 240 s at the default — and
+raise `ChallengeWall` after four in a row. The observation is recorded as
+`access_control_challenge` — *collection uncertainty, never evidence of absence*
+— and the affected listing scan fails qualification, so nothing false is
+concluded from it.
 
 ### The browser step is not evasion
 
@@ -103,7 +116,13 @@ Explicitly, it does **not**:
   who we are;
 - rotate proxies or IP addresses — there is no proxy configuration at all;
 - install stealth patches or anti-detection plugins — plain Playwright Chromium;
-- solve CAPTCHAs, by service or otherwise.
+- solve CAPTCHAs, by service or otherwise;
+- bypass the pacing or the destination policy — the browser page load goes
+  through `UrlPolicy.check` and `budget.acquire()` like any other live request
+  (`SourceClient._solve`). A page load is live traffic that reaches the source
+  and every subresource the page references, so charging it to the run's budget
+  is what keeps the one-budget guarantee true of the whole application rather
+  than only of the HTTP path.
 
 It is used twice: once **before** the first request (`SourceClient.prime`), so
 that the run does not spend source requests being refused, and again if a
@@ -121,7 +140,10 @@ It is bounded: `max_solves_per_run` (default 6), and the token is reused for
 or with Playwright simply not installed, priming is a no-op that records
 `access_priming_unavailable` in the run's errors, and a challenge is recorded as
 `access_control_challenge`: an explicit coverage exception that never becomes
-evidence of a missing advertisement. The browser step improves coverage; it is
+evidence of a missing advertisement. A priming attempt where the page loaded
+normally and the source issued no token is *not* recorded as an error — the
+result is `{"primed": false, "required": false}`, because no token exists until
+the source decides to challenge. The browser step improves coverage; it is
 not load-bearing for correctness.
 
 Every challenged attempt is archived as its own `fetches` row even when a later
@@ -143,7 +165,7 @@ It refuses:
 | Any scheme other than `http`/`https` | `scheme '…' not permitted` — blocks `file:`, `gopher:`, `ftp:`, `data:` |
 | A missing host | `no host` |
 | `169.254.169.254`, `metadata.google.internal`, `metadata.goog`, `100.100.100.200`, `fd00:ec2::254` | `metadata service address` — cloud instance metadata, blocked by name as well as by address class |
-| Any host not in `network.allowed_hosts` | `host is not in the collection allowlist` (exact match; subdomains are **not** implied by default) |
+| Any host not in `network.allowed_hosts` | `host is not in the collection allowlist`. Exact match, plus subdomains of an allowlisted host when `network.allow_subdomains` is true — the default, and what makes a job document on `engineering.rowan.edu` reachable while everything outside the listed domains stays refused (`UrlPolicy.host_allowed`) |
 | `user:pass@host` forms | `embedded credentials are not permitted` |
 | A literal IP that is private, loopback, link-local, multicast, reserved or unspecified | `literal address is not a public address` |
 | A hostname that **resolves** to any such address | `resolves to non-public address <addr>` — DNS is resolved and every returned address is checked, so DNS rebinding into RFC1918 is caught |
@@ -165,10 +187,15 @@ silent skip.
 - **Downloaded documents are never executed, opened or rendered.** A resource is
   stored as bytes; text extraction is attempted only for textual media types, and
   its failure is recorded rather than raised (`details.py::_resource_text`).
-- **Only `job_document` links on `jobs.rowan.edu` are fetched.** Everything else
-  — external sites, internal navigation, mailto, in-page anchors, apply workflows
-  — is classified and excluded with a stored reason, so the archive can later
-  answer what was *not* followed.
+- **Only `job_document` links on Rowan's own domain are fetched** (`rowan.edu` or
+  any `*.rowan.edu` host), and only when the extraction that read the
+  advertisement classified them that way. Everything else — third-party
+  documents, external sites, internal navigation, mailto, in-page anchors, apply
+  workflows — is classified and excluded with a stored reason, so the archive can
+  later answer what was *not* followed. Those decisions are stored per
+  extraction (`resource_links`, unique on `(extraction_id, url_raw, position)`),
+  so the stored decision and what was actually retrieved cannot drift apart when
+  the scope is widened.
 - **Parsing is defensive.** Both adapters catch parse failure and return a
   `failed` extraction with the detail recorded, rather than propagating.
 - **Decoding failures are reported, not hidden**: `decode_strategy='replace'`
@@ -211,6 +238,7 @@ another application's credentials or invent a recipient
 | `<data_root>/rowanjobs.db` | `0600` | `open_db` on creation |
 | Backup snapshots | `0600` | `BackupManager.create`, `restore_to` |
 | `health.json`, manifests, `restore-verification.json`, `deployment.json` | `0600` | `ops/atomic.py::write_bytes` (default mode) |
+| Export files, and the diagnostic bundle | `0600` | `export.py::export_to_path` (they carry full advertisement text, so the directory mode alone is not relied on); the bundle goes through `ops/atomic.py` |
 | `runtime/collector.lock` | `0600` | `CollectorLock.acquire` |
 
 `rowanjobs doctor` checks the data root is `0o700` and fails if it is not.

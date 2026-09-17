@@ -355,3 +355,20 @@ def test_versions_record_the_parser_that_produced_them(archive: FakeSource, db: 
         assert row["parser_version"], "a version with no parser cannot be scoped for comparison"
         assert row["contract_version"]
         assert row["text_contract_version"]
+
+
+@pytest.mark.parametrize("constant", ["PARSER_VERSION", "TEXT_CONTRACT_VERSION"])
+def test_relink_follows_the_lineage_not_only_the_contract(
+    archive: FakeSource, db: Database, monkeypatch: pytest.MonkeyPatch, constant: str
+) -> None:
+    """--relink guarded on contract_version alone, so it did nothing after a
+    parser or text-contract bump — exactly the upgrades lineage scoping exists
+    for. Asking for a relink and silently getting none is worse than refusing.
+    """
+    upgrade_parser(monkeypatch, only=constant)
+    forbid_network(monkeypatch)
+
+    report = reprocess_details(db, relink=True)
+
+    assert report.versions_created == 1
+    assert report.observations_relinked == 1
