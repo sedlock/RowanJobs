@@ -8,6 +8,7 @@ retries can never add up to a second daily confirmation.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -18,7 +19,7 @@ from rowanjobs.collect.repo import Repository
 from rowanjobs.collect.scanner import ListingScanner
 from rowanjobs.config import Config
 from rowanjobs.db import Database
-from rowanjobs.timeutil import slot_for
+from rowanjobs.timeutil import local_date_str, slot_for
 
 from .conftest import (
     LISTING_URL,
@@ -96,8 +97,14 @@ def test_two_distinct_slot_dates_meet_the_two_day_reporting_rule(
     without = make_source({"1001": "Stays"}, detail_for=("1002",))
     collect(without, run_kind="daily")
 
-    # A second qualifying day, spelled out on the derived row.
+    # A second qualifying day, spelled out on the derived row. The date is
+    # derived from the run's own slot rather than hard-coded: a fixed date
+    # silently collapses into a single slot on the day the clock reaches it,
+    # and the test then fails for the calendar rather than for the behaviour.
     posting_id = posting_id_of(db, "1002")
+    today = date.fromisoformat(local_date_str())
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    tomorrow_utc = f"{tomorrow}T11:00:00Z"
     with db.write():
         db.execute(
             "INSERT INTO presence_events(posting_id, event_kind, rules_version, "
@@ -106,17 +113,17 @@ def test_two_distinct_slot_dates_meet_the_two_day_reporting_rule(
             (
                 posting_id,
                 EVENT_RULES_VERSION,
-                "2026-09-17T11:00:00Z",
-                "2026-09-17",
+                tomorrow_utc,
+                tomorrow,
                 "v1-unfiltered-en-us",
-                "2026-09-17T11:00:00Z",
+                tomorrow_utc,
             ),
         )
 
     report = repeatedly_unlisted(repo, posting_id)
     assert report["count"] == 2
     assert report["meets_two_day_rule"] is True
-    assert report["latest_absent_at_utc"] == "2026-09-17T11:00:00Z"
+    assert report["latest_absent_at_utc"] == tomorrow_utc
 
 
 def test_calendar_days_with_no_qualified_scan_are_reported_as_gaps_not_absences(
