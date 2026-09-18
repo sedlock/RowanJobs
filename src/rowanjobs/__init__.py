@@ -18,7 +18,10 @@ TEXT_CONTRACT_VERSION = "1.0.0"
 QUALIFICATION_RULES_VERSION = "1.0.0"
 # Bumped whenever derived presence/change event rules change.
 EVENT_RULES_VERSION = "1.0.0"
-# Version of the machine-readable health/status contract.
-HEALTH_SCHEMA_VERSION = "1"
+# Version of the machine-readable health/status contract. Bumped to 2 when the
+# notifications section changed from an alerting stub to run reporting: it now
+# carries per-state delivery counts and the run ids that completed with no
+# report, so a consumer written against version 1 must be told.
+HEALTH_SCHEMA_VERSION = "2"
 
 SOURCE_NAMESPACE = "rowan.pageup"

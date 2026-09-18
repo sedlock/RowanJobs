@@ -177,12 +177,21 @@ def run_doctor(cfg: Config) -> dict[str, Any]:
         )
     )
 
-    notify = Notifier(cfg.notify).status()
+    # Unconfigured reporting is a choice, not a fault; an unreadable or
+    # world-readable credential file is a fault, and doctor must say so before
+    # the next collection discovers it.
+    notify = Notifier(cfg).status()
+    notify_ok: bool | None = True
+    if notify["state"] == "UNCONFIGURED":
+        notify_ok = None
+    elif notify["state"] == "FAILED":
+        notify_ok = False
     checks.append(
         _check(
             "notifications",
-            None if notify["state"] == "UNCONFIGURED" else True,
+            notify_ok,
             f"{notify['state']}: {notify['detail']}",
+            recipient=notify.get("recipient"),
         )
     )
 

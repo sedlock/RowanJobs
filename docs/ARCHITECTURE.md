@@ -55,7 +55,10 @@ Two structural ideas carry most of the weight:
 | `src/rowanjobs/ops/doctor.py` | Pre-flight diagnosis and the deployment manifest; a rejected configuration is reported as a failed check rather than a crash |
 | `src/rowanjobs/ops/diagnostics.py` | The sanitised diagnostic bundle behind `rowanjobs diagnostics` |
 | `src/rowanjobs/ops/schedule.py` | systemd timer inspection; reports what systemd says, not what the unit intends |
-| `src/rowanjobs/ops/notify.py` | Optional command-based alerting; `UNCONFIGURED` rather than invented delivery |
+| `src/rowanjobs/ops/notify.py` | Run reporting: composes, delivers and records one report per run. Walled off from collection health, so a bounced report never changes a harvest's verdict |
+| `src/rowanjobs/ops/report.py` | The per-run report, built entirely from stored evidence for one `run_id` — never re-reads the source, never calls a baseline's discoveries news |
+| `src/rowanjobs/ops/mail.py` | SMTP submission over STARTTLS; classifies failures so a retry cannot spin on a permanent one. Provider acceptance is never reported as inbox receipt |
+| `src/rowanjobs/ops/credentials.py` | Loads the SMTP App Password from a 0600 file, refusing insecure storage before reading any secret material |
 | `src/rowanjobs/ops/atomic.py` | Write-temp / fsync / rename / fsync-dir for `health.json` and manifests |
 | `src/rowanjobs/reprocess.py` | Offline re-parsing of archived payloads |
 | `src/rowanjobs/export.py` | Datasets with provenance; CSV formula neutralisation |

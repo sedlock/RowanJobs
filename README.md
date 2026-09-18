@@ -57,6 +57,7 @@ uv run rowanjobs doctor                 # environment, runtime and schema pre-fl
 uv run rowanjobs migrate                # create/upgrade the archive schema
 uv run rowanjobs collect --kind manual  # one collection, paced and bounded
 uv run rowanjobs status                 # what happened, and how trustworthy it is
+uv run rowanjobs notify --test          # optional: prove the run-report email route
 ```
 
 `--json`, `--config`, `--data-root` and `--db` are accepted **either before or
@@ -72,6 +73,7 @@ both work (`src/rowanjobs/cli.py::build_parser`).
 | `collect` | Runs one collection. `--kind daily\|retry\|manual\|verification`, `--max-details`, `--no-verification`, `--no-backup` |
 | `retry` | Bounded same-day retry of an incomplete scheduled collection; keeps the parent's scheduled slot |
 | `status` | Operational health; `--no-timer` skips systemd inspection |
+| `notify` | Delivers outstanding run reports. **Never collects**: no run is created and the source is never contacted. `--catch-up` composes reports for completed runs that never got one (marked delayed), `--run N` sends one run's report even if it was skipped or abandoned, `--test` proves the credential and route without recording anything |
 | `runs` | Recent runs from `v_run_health`; `--limit` |
 | `show JOB_ID` | One advertisement: freshness, source fields, URLs, links, description; `--full` |
 | `history JOB_ID` | Observation history, derived events and absence evidence; `--limit` |

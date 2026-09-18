@@ -150,16 +150,48 @@ See `docs/BACKUP_RESTORE.md`.
 
 ## `[notify]`
 
-RowanJobs will not borrow another application's credentials or invent a
-recipient. With nothing configured, notifications report `UNCONFIGURED` in the
-health output and nothing is sent — a visible status rather than pretended
-delivery (`src/rowanjobs/ops/notify.py`).
+Run reporting by email (`src/rowanjobs/ops/notify.py`, `ops/mail.py`,
+`ops/report.py`). The policy is in `docs/OPERATIONS.md`: a terminal status
+report after **every actual collection run**, and nothing at all from a retry
+window that found nothing to do, or from `status`, `doctor` or `health`.
+
+Both the destination and the credential are absent from the committed defaults.
+RowanJobs will not invent a recipient, and `config.example.toml` is public, so
+the address belongs in your own config file. With `kind` empty, notifications
+report `UNCONFIGURED` in the health output and nothing is sent — a visible
+status rather than pretended delivery.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `kind` | `""` | `""` (none) or `"command"`. |
-| `command` | `[]` | argv, run without a shell. The alert JSON arrives on **stdin**. 60-second timeout. |
-| `notify_on` | `["failed", "partial"]` | Which run outcomes trigger an alert. |
+| `kind` | `""` | `""` (reporting off) or `"smtp"`. |
+| `recipient` | `""` | Where reports go. Required for `kind = "smtp"`; empty means UNCONFIGURED. |
+| `sender` | `""` | Envelope sender. Empty means the authenticated SMTP account. |
+| `sender_name` | `"RowanJobs"` | Display name on the `From` header. |
+| `smtp_host` | `"smtp.gmail.com"` | Submission server. STARTTLS with certificate verification. |
+| `smtp_port` | `587` | Submission port. |
+| `smtp_timeout_seconds` | `30.0` | Per-attempt socket timeout. |
+| `credentials_path` | `"~/.config/rowanjobs/credentials.env"` | The App Password file. Must be mode **0600** in a directory no other account can enter, or delivery fails and `doctor` reports it. |
+| `max_attempts` | `5` | Delivery attempts before a report is `abandoned`. Mail-only: this never re-runs a collection. |
+| `controlpanel_url` | `""` | Optional link included in the report. |
+
+### The credential file
+
+Never in Git, never in `config.toml`, never in a log line or an exception
+message. Two keys, and the spaces Google displays an App Password with are
+stripped for you:
+
+```sh
+install -m 600 /dev/null ~/.config/rowanjobs/credentials.env
+cat > ~/.config/rowanjobs/credentials.env <<'EOF'
+GMAIL_SMTP_USER=you@example.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+EOF
+rowanjobs notify --test        # proves the route; records nothing
+```
+
+`load_credentials` refuses a file that is not mode 0600, or whose directory is
+group- or world-accessible, before it reads any secret material
+(`src/rowanjobs/ops/credentials.py`).
 
 ---
 
@@ -297,9 +329,18 @@ offhost_command   = []          # argv for kind="command"; {src} and {dst} subst
 
 
 [notify]
-# Left unconfigured on purpose: RowanJobs will not borrow another application's
-# credentials or invent a recipient. Unconfigured is reported, not hidden.
-kind      = ""                  # "" or "command"
-command   = []                  # argv, no shell; the alert JSON arrives on stdin
-notify_on = ["failed", "partial"]
+# Run reporting by email. Empty here because this example is committed and
+# RowanJobs will not invent a recipient; set both in your own config file.
+# Unconfigured is reported, not hidden.
+kind                 = ""       # "" or "smtp"
+recipient            = ""       # required for kind = "smtp"
+sender               = ""       # empty: the authenticated SMTP account
+sender_name          = "RowanJobs"
+smtp_host            = "smtp.gmail.com"
+smtp_port            = 587
+smtp_timeout_seconds = 30.0
+# Mode 0600, outside Git. Holds GMAIL_SMTP_USER and GMAIL_APP_PASSWORD.
+credentials_path     = "~/.config/rowanjobs/credentials.env"
+max_attempts         = 5        # mail-only retries; never re-collects
+controlpanel_url     = ""
 ```

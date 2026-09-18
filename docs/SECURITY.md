@@ -27,7 +27,7 @@ It categorically does **not**:
 
 | Not done | Enforced by |
 |---|---|
-| Create or use an applicant account | No credential handling exists anywhere in the codebase |
+| Create or use an applicant account | No credential is ever sent to the source. The one credential RowanJobs holds is the outbound SMTP App Password used to email run reports (§7); it is never presented to `jobs.rowan.edu` or any other collection host |
 | Submit an application, or follow an apply workflow | `classify_link` marks `apply-link`, `employee-referral-link`, `/apply/` and any `pageuppeople.com` host as `apply_workflow` with `collection_decision='exclude'` and the reason *"application submission workflow is never followed"* |
 | Use Rowan internal credentials or internal systems | The host allowlist is `jobs.rowan.edu`, `careers-static.pageuppeople.com` and `rowan.edu` (with `allow_subdomains = true`, so `*.rowan.edu` matches); nothing else can be contacted |
 | Send any authentication header | No `Authorization`, cookie jar seeding or API key is ever constructed. The only cookies the client ever holds are the WAF tokens described in §4 |
@@ -221,11 +221,39 @@ Because the collector emits its output as JSON on stdout and the service units
 send stdout to journald, the same redaction covers the logs: there is no separate
 log path that sees unredacted headers.
 
-RowanJobs holds no credentials of its own. `[notify]` and `[backup] offhost_*`
-run **operator-supplied argv without a shell**; any credentials those tools need
-belong to those tools' own configuration, not to RowanJobs, which will not borrow
-another application's credentials or invent a recipient
-(`src/rowanjobs/ops/notify.py`).
+RowanJobs holds one credential and only one: the SMTP App Password used to send
+run reports. `[backup] offhost_*` runs **operator-supplied argv without a
+shell**; any credentials those tools need belong to their own configuration, not
+to RowanJobs, which will not borrow another application's credentials.
+
+### The SMTP credential
+
+Stored in `[notify] credentials_path` (default
+`~/.config/rowanjobs/credentials.env`), never in `config.toml`, never in Git.
+`src/rowanjobs/ops/credentials.py` enforces, **before reading any secret
+material**:
+
+* the file exists and is a regular file;
+* it is mode `0600` — any other mode is refused by name and mode;
+* its directory is not group- or world-accessible.
+
+The value is never printed, logged, or included in an exception message.
+`SmtpCredentials.__repr__` and `__str__` both render the password as
+`<redacted>`, so it cannot reach a traceback or a log line through ordinary
+formatting. The one place SMTP would otherwise echo it back —
+`smtplib.SMTPAuthenticationError`, whose text can quote the attempted
+credential — is caught and reduced to the response code alone
+(`src/rowanjobs/ops/mail.py`). A test asserts the secret appears in neither the
+error nor the repr.
+
+Delivery is STARTTLS on the submission port with certificate verification
+(`ssl.create_default_context()`); no path disables verification. The credential
+is only ever held in memory inside the sending process, and reporting commands
+open the archive read-only and never load it at all.
+
+`rowanjobs doctor` **fails** on a credential file that is missing or insecurely
+stored once reporting is configured; an unconfigured destination is only a note,
+because choosing not to send is not a fault.
 
 ## 8. File permissions
 
@@ -240,6 +268,7 @@ another application's credentials or invent a recipient
 | `health.json`, manifests, `restore-verification.json`, `deployment.json` | `0600` | `ops/atomic.py::write_bytes` (default mode) |
 | Export files, and the diagnostic bundle | `0600` | `export.py::export_to_path` (they carry full advertisement text, so the directory mode alone is not relied on); the bundle goes through `ops/atomic.py` |
 | `runtime/collector.lock` | `0600` | `CollectorLock.acquire` |
+| `~/.config/rowanjobs/credentials.env` | `0600` **required** | The operator. `load_credentials` refuses any other mode rather than reading it |
 
 `rowanjobs doctor` checks the data root is `0o700` and fails if it is not.
 

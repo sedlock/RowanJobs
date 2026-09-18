@@ -98,10 +98,28 @@ offhost_namespace = "rowanjobs"
 offhost_command = []
 
 [notify]
-# RowanJobs will not borrow another application's credentials or invent a
-# recipient. With kind empty, nothing is sent and health reports UNCONFIGURED.
-#   kind    = "command"
-#   command = ["/usr/local/bin/alert", "--channel", "ops"]   # alert JSON on stdin
+# Run reporting by email. A status report goes out after every actual
+# collection -- successful or not. A retry window that finds nothing to do
+# sends nothing, and `status`, `doctor` and `health` never send at all.
+#
+# Left empty here on purpose. RowanJobs will not invent a recipient, and this
+# file is committed, so the address belongs in your own
+# ~/.config/rowanjobs/config.toml instead. With kind empty, nothing is sent and
+# health reports UNCONFIGURED -- a visible state, not pretended delivery.
+#   kind      = "smtp"
+#   recipient = "you@example.com"
 kind = ""
-command = []
-notify_on = ["failed", "partial"]
+recipient = ""
+# Defaults to the authenticated SMTP account when empty.
+sender = ""
+sender_name = "RowanJobs"
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_timeout_seconds = 30.0
+# The App Password lives here, mode 0600, never in this file and never in Git:
+#   GMAIL_SMTP_USER=you@example.com
+#   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+credentials_path = "~/.config/rowanjobs/credentials.env"
+# Mail-only retries. A provider outage costs a later email, never a re-collection.
+max_attempts = 5
+controlpanel_url = ""

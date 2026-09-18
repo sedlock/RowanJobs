@@ -47,7 +47,7 @@ def health(cfg: Config, db: Database) -> dict[str, Any]:
 def test_health_reports_the_documented_top_level_contract(cfg: Config, db: Database) -> None:
     payload = health(cfg, db)
 
-    assert payload["health_schema_version"] == HEALTH_SCHEMA_VERSION == "1"
+    assert payload["health_schema_version"] == HEALTH_SCHEMA_VERSION == "2"
     assert set(payload) == {
         "health_schema_version",
         "application",

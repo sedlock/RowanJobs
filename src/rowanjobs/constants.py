@@ -120,3 +120,13 @@ PRESENCE_EVENT_KINDS = (
 BACKUP_KINDS = ("daily", "weekly", "monthly", "manual", "predeploy")
 
 PROTECTION_STATES = ("VERIFIED", "DEGRADED", "UNCONFIGURED", "BLOCKED_EXTERNAL", "FAILED")
+
+# Delivery state of one run report (``notifications.state``, migration 7).
+# 'skipped' is not a failure: it records a run that was deliberately never
+# reported, which is what runs predating the reporting feature are.
+NOTIFICATION_STATES = ("pending", "accepted", "failed", "abandoned", "skipped")
+
+NOTIFICATION_KINDS = ("run_report",)
+
+# Why a delivery attempt failed. Only 'transient' is worth another attempt.
+NOTIFICATION_FAILURE_KINDS = ("transient", "permanent")

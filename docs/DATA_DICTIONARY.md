@@ -30,7 +30,7 @@ Conventions used throughout:
 |---|---|---|
 | **Append-only evidence** | `artifacts`, `fetches`, `extractions`, `listing_scans`*, `listing_pages`, `listing_entries`, `listing_scan_assessments`, `posting_observations`, `posting_versions`, `version_values`, `resource_links`, `resource_observations`, `resource_associations` | Ordinary ingestion only inserts. Never `UPDATE` or `DELETE` these from the collection path. |
 | **Append-only identity** | `postings`, `posting_urls`, `sources`, `source_configs` | Rows are never removed or re-identified. `posting_urls` advances `last_seen_at_utc`/`seen_count`; `postings` rows are immutable once created. |
-| **Mutable operational state** | `work_queue`, `recheck_policy`, `collection_runs`, `backups`, `deployments` | Updated in place by design: a run is opened, heartbeated and closed; queue items change state; a pruned backup is marked, and so on. |
+| **Mutable operational state** | `work_queue`, `recheck_policy`, `collection_runs`, `backups`, `deployments`, `notifications` | Updated in place by design: a run is opened, heartbeated and closed; queue items change state; a pruned backup is marked; a report moves from pending to accepted, and so on. None of these is evidence about the source. |
 | **Derived, rebuildable** | `presence_events`, `coverage_gaps` | Always carry `rules_version` and the evidence ids that produced them. Can be dropped and rebuilt from the evidence without contacting the source. |
 | **Projections** | all `v_*` views | Cannot drift from the evidence, because they are views. |
 
@@ -579,6 +579,37 @@ Written by `rowanjobs record-deployment`.
 | `offhost_state` | `UNCONFIGURED` (default), `VERIFIED`, `FAILED` — compare `PROTECTION_STATES` |
 | `offhost_target`, `offhost_detail` | Destination and result |
 | `pruned_at_utc` | Set when rotation removed the file |
+
+## `notifications` *(mutable)*
+
+One row per run report. Delivery state is persisted rather than inferred from
+logs, so a report that was composed but never accepted is distinguishable from
+one that was never attempted and from one that was accepted twice. Nothing here
+is evidence about the source, and a row in any state leaves the collection
+tables and the run's own verdict untouched.
+
+| Column | Meaning / permitted values |
+|---|---|
+| `notification_id` | Primary key |
+| `run_id` | The run being reported. `UNIQUE(run_id, kind)` — one routine report per run, however many delivery attempts it takes |
+| `kind` | `run_report` (`NOTIFICATION_KINDS`) |
+| `recipient`, `sender` | Addresses used for this report |
+| `subject` | Subject line actually composed. NULL only for `skipped` |
+| `body_sha256` | Digest of the plain-text body **that was handed to the provider** — rewritten on each attempt, because the body is recomposed from evidence each time. NULL only for `skipped` |
+| `state` | `pending`, `accepted`, `failed`, `abandoned`, `skipped` (`NOTIFICATION_STATES`). See `docs/OPERATIONS.md` § Run reporting |
+| `attempts`, `max_attempts` | Delivery attempts spent and allowed. Mail-only: exhausting the budget never re-runs a collection |
+| `delayed` | 1 when the report was sent later than the run it describes. The report itself is labelled to match; the collection times shown stay the run's own |
+| `created_at_utc`, `updated_at_utc` | Row lifecycle |
+| `first_attempt_at_utc`, `last_attempt_at_utc` | Delivery attempt window |
+| `accepted_at_utc` | When the submission server accepted it. **Acceptance is not inbox receipt** and is labelled as such wherever it is reported |
+| `message_id` | `Message-ID` of the accepted message |
+| `provider_response` | What the provider said on acceptance |
+| `failure_kind` | `transient` or `permanent` (`NOTIFICATION_FAILURE_KINDS`). Only `transient` is retried |
+| `last_error` | Why the last attempt failed — never containing credential material. For a `skipped` row, why it was skipped |
+
+Two `CHECK` constraints keep the table from making a claim it cannot support:
+only a `skipped` row may lack a `subject` and `body_sha256`, and no row may say
+`accepted` without both an `accepted_at_utc` and a `message_id`.
 
 ## `presence_events` *(derived, rebuildable)*
 

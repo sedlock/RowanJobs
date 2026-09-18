@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import html
 import json
-import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -161,7 +162,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     from .collect.runner import Collector
     from .ops.backup import BackupManager
     from .ops.health import build_health, write_health
-    from .ops.notify import Notifier
+    from .ops.notify import DeliveryOutcome, Notifier
 
     cfg = _config_from(args)
     cfg.layout.ensure()
@@ -177,6 +178,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     backup_payload: dict[str, Any] | None = None
     health: dict[str, Any] = {}
+    notifier = Notifier(cfg)
+    notification = DeliveryOutcome("skipped", "no run was recorded, so there is nothing to report")
+    swept: list[DeliveryOutcome] = []
     if result.run_id is not None:
         db = open_db(cfg.layout.db_path)
         try:
@@ -210,22 +214,26 @@ def cmd_collect(args: argparse.Namespace) -> int:
                     )
             health = build_health(cfg, db)
             write_health(cfg, db)
+
+            # Reporting is the last thing a collection does, and it is walled
+            # off from the collection's own verdict: a report that cannot be
+            # delivered is recorded, never allowed to make a good harvest look
+            # bad, and never itself emailed.
+            notifier.seed_baseline(db, exclude_run_id=result.run_id)
+            notification = notifier.report_run(
+                db,
+                result.run_id,
+                run_kind=args.kind,
+                outcome=result.outcome,
+                schedule=health.get("schedule"),
+            )
+            # Anything still owed from an earlier run goes out on the same
+            # connection. This never re-collects; the worst case is a late email.
+            swept = notifier.sweep(
+                db, schedule=health.get("schedule"), exclude_run_id=result.run_id
+            )
         finally:
             db.close()
-
-    notifier = Notifier(cfg.notify)
-    notification = notifier.maybe_notify(
-        result.outcome,
-        {
-            "application": "rowanjobs",
-            "host": os.environ.get("HOSTNAME") or "",
-            "outcome": result.outcome,
-            "detail": result.detail,
-            "run_id": result.run_id,
-            "counts": result.counts,
-            "at_local": local_str(utc_str()),
-        },
-    )
 
     payload = {
         "run_id": result.run_id,
@@ -241,7 +249,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "coverage": result.coverage,
         "errors": result.errors,
         "backup": backup_payload,
-        "notification": {"state": notification.state, "detail": notification.detail},
+        "notification": {
+            "state": notification.state,
+            "detail": notification.detail,
+            "message_id": notification.message_id,
+            "accepted_at_utc": notification.accepted_at_utc,
+            "note": "acceptance by the provider is not the same claim as inbox receipt",
+        },
+        "reports_swept": [{"state": o.state, "detail": o.detail} for o in swept],
     }
     if args.json:
         emit(payload, True)
@@ -346,6 +361,109 @@ def cmd_retry(args: argparse.Namespace) -> int:
     args.parent_run = parent
     args.attempt = attempts + 2
     return cmd_collect(args)
+
+
+# -------------------------------------------------------------------- notify
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Deliver whatever reporting still owes, without collecting anything.
+
+    This command never touches the source and never creates a run. Its worst
+    case is a late email, which is exactly the point: mail trouble must be
+    recoverable without re-reading the website.
+    """
+    from .ops.mail import build_message, new_message_id, send
+    from .ops.notify import Notifier
+
+    cfg = _config_from(args)
+    notifier = Notifier(cfg)
+
+    if args.test:
+        # A connectivity check, not evidence about a collection: it proves the
+        # credential and the route work, so it is deliberately not recorded in
+        # the notifications table alongside real run reports.
+        if not notifier.configured:
+            line(notifier.status()["detail"])
+            return EXIT_USAGE
+        now = local_str(utc_str())
+        body = (
+            "This is a RowanJobs delivery test.\n\n"
+            f"Sent {now} from {socket.gethostname()}.\n"
+            "It confirms the SMTP credential and route only. It says nothing "
+            "about any collection, and it was not recorded in the archive.\n"
+        )
+        message = build_message(
+            sender=notifier.settings.sender or "",
+            sender_name=notifier.settings.sender_name,
+            recipient=cfg.notify.recipient,
+            subject="RowanJobs delivery test",
+            text_body=body,
+            html_body=f"<html><body><pre>{html.escape(body)}</pre></body></html>",
+            message_id=new_message_id(),
+        )
+        result = send(message, notifier.settings)
+        payload = {
+            "test": True,
+            "recipient": cfg.notify.recipient,
+            "accepted": result.accepted,
+            "detail": result.provider_response or result.error,
+            "failure_kind": result.failure_kind,
+            "note": "acceptance by the provider is not the same claim as inbox receipt",
+        }
+        if args.json:
+            emit(payload, True)
+        else:
+            line(f"test -> {cfg.notify.recipient}: {'accepted' if result.accepted else 'FAILED'}")
+            line(f"  {payload['detail']}")
+            if result.accepted:
+                line("  (accepted by the provider; that is not proof it reached the inbox)")
+        return EXIT_OK if result.accepted else EXIT_FAILED
+
+    if not cfg.layout.db_path.exists():
+        line("no archive yet; nothing to report")
+        return EXIT_OK
+
+    db = open_db(cfg.layout.db_path)
+    try:
+        if args.run is not None:
+            # Explicit: send this one, even if it was settled as predating
+            # reporting or abandoned after its attempt budget.
+            notification_id = notifier.queue(db, args.run, delayed=True, revive=True)
+            if notification_id is None:
+                line(notifier.status()["detail"])
+                return EXIT_USAGE
+            outcomes = [notifier.deliver(db, notification_id)]
+        else:
+            # Asking for a catch-up is asking for history to be reported, so the
+            # marker that writes pre-existing runs off as predating reporting is
+            # deliberately not applied first -- it would silence the very runs
+            # the operator just asked for.
+            if not args.catch_up:
+                notifier.seed_baseline(db)
+            outcomes = notifier.sweep(db, catch_up=args.catch_up)
+        status = notifier.status(db)
+    finally:
+        db.close()
+
+    payload = {
+        "status": status,
+        "delivered": [{"state": o.state, "detail": o.detail} for o in outcomes],
+    }
+    if args.json:
+        emit(payload, True)
+    else:
+        line(f"notifications: {status['state']} — {status['detail']}")
+        for outcome in outcomes:
+            line(f"  {outcome.state}: {outcome.detail}")
+        if not outcomes:
+            line("  nothing was owed")
+        if status.get("unreported_runs"):
+            line(
+                f"  run(s) {status['unreported_runs']} completed with no report; "
+                "'rowanjobs notify --catch-up' composes them as delayed reports"
+            )
+    return {"FAILED": EXIT_FAILED, "DEGRADED": EXIT_DEGRADED}.get(str(status["state"]), EXIT_OK)
 
 
 # -------------------------------------------------------------------- status
@@ -1188,6 +1306,24 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("--no-verification", action="store_true")
     retry.add_argument("--no-backup", action="store_true")
     retry.set_defaults(func=cmd_retry)
+
+    notify = sub.add_parser(
+        "notify",
+        parents=[shared],
+        help="deliver outstanding run reports (never collects)",
+    )
+    notify.add_argument(
+        "--catch-up",
+        action="store_true",
+        help="also compose reports for completed runs that never got one, marked delayed",
+    )
+    notify.add_argument(
+        "--run",
+        type=int,
+        help="send the report for one run, even if it was skipped or abandoned",
+    )
+    notify.add_argument("--test", action="store_true", help="send a delivery test; records nothing")
+    notify.set_defaults(func=cmd_notify)
 
     status = sub.add_parser("status", parents=[shared], help="operational state")
     status.add_argument("--no-timer", action="store_true", help="skip systemd inspection")

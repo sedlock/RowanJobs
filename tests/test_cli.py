@@ -102,7 +102,9 @@ def test_collect_runs_a_whole_collection_and_reports_it_as_json(
     assert payload["counts"]["final_qualified_listing_count"] == 1
     assert payload["coverage"]["absence_analysis_supported"] is True
     assert payload["backup"]["state"] == "VERIFIED"
-    assert payload["notification"]["state"] == "SKIPPED"
+    # No recipient is configured in the test environment, so nothing is sent
+    # and the collection still succeeds: reporting cannot change the verdict.
+    assert payload["notification"]["state"] == "unconfigured"
     assert payload["duration"]
     assert code == EXIT_OK
     assert cfg.layout.health_path.exists()
@@ -158,7 +160,7 @@ def test_status_json_returns_the_documented_health_contract(
     code = cli("--json", "status", "--no-timer")
 
     payload = captured_json(capsys)
-    assert payload["health_schema_version"] == "1"
+    assert payload["health_schema_version"] == "2"
     assert set(payload) >= {
         "application",
         "app_version",
@@ -524,3 +526,155 @@ def test_every_command_in_the_documented_interface_is_reachable() -> None:
         name[len("cmd_") :].replace("_", "-") for name in dir(cli_module) if name.startswith("cmd_")
     }
     assert implemented <= registered, f"unregistered commands: {sorted(implemented - registered)}"
+
+
+# ------------------------------------------------------------------- notify
+
+
+@pytest.fixture
+def reporting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
+    """Configure run reporting and hand the CLI a fake submission server.
+
+    The CLI builds its own Notifier, so the transport is replaced at the point
+    ``mail.send`` would otherwise open a socket. Nothing here can reach a real
+    provider.
+    """
+    from .test_reporting import FakeSMTP
+
+    secure = tmp_path / "secure"
+    secure.mkdir(mode=0o700)
+    credentials = secure / "credentials.env"
+    credentials.write_text("GMAIL_SMTP_USER=archiver@example.com\nGMAIL_APP_PASSWORD=abcd efgh\n")
+    credentials.chmod(0o600)
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[notify]\n"
+        'kind = "smtp"\n'
+        'recipient = "operator@example.com"\n'
+        'sender = "archiver@example.com"\n'
+        'smtp_host = "smtp.example.com"\n'
+        f'credentials_path = "{credentials}"\n'
+    )
+
+    def configure(**kwargs: Any) -> FakeSMTP:
+        smtp = FakeSMTP(**kwargs)
+        monkeypatch.setattr("rowanjobs.ops.mail._default_smtp", lambda *_a: smtp)
+        return smtp
+
+    configure.config_path = config_path  # type: ignore[attr-defined]
+    return configure
+
+
+def test_a_collection_reports_itself_by_email(
+    cli, source: FakeSource, reporting, capsys: pytest.CaptureFixture[str]
+) -> None:
+    smtp = reporting()
+
+    code = cli("--config", str(reporting.config_path), "--json", "collect", "--kind", "daily")
+
+    payload = captured_json(capsys)
+    assert code == EXIT_OK
+    assert payload["notification"]["state"] == "accepted"
+    assert payload["notification"]["message_id"]
+    assert payload["notification"]["note"] == (
+        "acceptance by the provider is not the same claim as inbox receipt"
+    )
+    assert len(smtp.sent) == 1
+    assert smtp.sent[0]["To"] == "operator@example.com"
+    assert "RowanJobs OK" in str(smtp.sent[0]["Subject"])
+
+
+def test_mail_trouble_does_not_make_a_good_collection_look_bad(
+    cli, source: FakeSource, reporting, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import smtplib
+
+    reporting(raises=smtplib.SMTPResponseException(451, b"try later"))
+
+    code = cli("--config", str(reporting.config_path), "--json", "collect", "--kind", "daily")
+
+    payload = captured_json(capsys)
+    # The collection succeeded. Only the report is outstanding, and it says so.
+    assert code == EXIT_OK
+    assert payload["outcome"] == "success"
+    assert payload["notification"]["state"] == "failed"
+    assert payload["backup"]["state"] == "VERIFIED"
+
+
+def test_notify_resends_a_report_that_was_never_accepted(
+    cli, source: FakeSource, reporting, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import smtplib
+
+    reporting(raises=smtplib.SMTPResponseException(451, b"try later"))
+    assert cli("--config", str(reporting.config_path), "collect", "--kind", "daily") == EXIT_OK
+    capsys.readouterr()
+
+    smtp = reporting()
+    code = cli("--config", str(reporting.config_path), "--json", "notify")
+
+    payload = captured_json(capsys)
+    assert code == EXIT_OK
+    assert [d["state"] for d in payload["delivered"]] == ["accepted"]
+    assert payload["status"]["state"] == "VERIFIED"
+    assert len(smtp.sent) == 1
+
+
+def test_notify_never_collects(
+    cli, source: FakeSource, reporting, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reporting()
+    assert cli("--config", str(reporting.config_path), "collect", "--kind", "daily") == EXIT_OK
+    capsys.readouterr()
+    before = len(source.requests)
+
+    cli("--config", str(reporting.config_path), "notify")
+
+    assert len(source.requests) == before
+
+
+def test_notify_catch_up_composes_a_delayed_report_for_a_silent_run(
+    cli, source: FakeSource, reporting, cfg: Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A collection that ran before reporting was configured leaves no report.
+    assert cli("collect", "--kind", "daily") == EXIT_OK
+    capsys.readouterr()
+
+    smtp = reporting()
+    code = cli("--config", str(reporting.config_path), "--json", "notify", "--catch-up")
+
+    payload = captured_json(capsys)
+    assert code == EXIT_OK
+    assert [d["state"] for d in payload["delivered"]] == ["accepted"]
+    assert "(delayed report)" in str(smtp.sent[0]["Subject"])
+
+
+def test_a_delivery_test_proves_the_route_without_recording_anything(
+    cli, source: FakeSource, reporting, cfg: Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli("collect", "--kind", "daily") == EXIT_OK
+    capsys.readouterr()
+
+    smtp = reporting()
+    code = cli("--config", str(reporting.config_path), "--json", "notify", "--test")
+
+    payload = captured_json(capsys)
+    assert code == EXIT_OK
+    assert payload["accepted"] is True
+    assert payload["note"] == "acceptance by the provider is not the same claim as inbox receipt"
+    assert "delivery test" in str(smtp.sent[0]["Subject"]).lower()
+
+    db = open_readonly(cfg.layout.db_path)
+    try:
+        # A connectivity check is not evidence about a collection.
+        assert db.scalar("SELECT COUNT(*) FROM notifications") == 0
+    finally:
+        db.close()
+
+
+def test_notify_without_a_destination_is_a_usage_error_not_a_silent_success(
+    cli, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli("notify", "--test") == EXIT_USAGE
+    assert "no notification destination" in capsys.readouterr().out

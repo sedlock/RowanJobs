@@ -236,7 +236,7 @@ def build_health(cfg: Config, db: Database, *, include_timer: bool = True) -> di
             },
         },
         "backup": backups.status(db),
-        "notifications": Notifier(cfg.notify).status(),
+        "notifications": Notifier(cfg).status(db),
         "schedule": timer_status(cfg) if include_timer else None,
         "paths": {
             "data_root": str(layout.data_root),

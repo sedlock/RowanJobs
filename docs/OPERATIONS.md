@@ -76,6 +76,107 @@ work) is exhausted.
 
 ---
 
+## Run reporting
+
+A status report is emailed after **every actual collection run** — successful,
+partial, failed, an interrupted one, a recovery attempt that really collected,
+or a manual run. The three things that send nothing at all:
+
+* a retry window that found nothing to do (it never creates a run);
+* a run that collected nothing because another collector held the lock;
+* `status`, `doctor`, `health`, `export` and every other reporting command.
+
+Reporting is the last thing a collection does and it is walled off from the
+collection's own verdict. **A report that cannot be delivered never makes a good
+harvest look bad**: the exit code, the health JSON and the archive are
+unchanged, and the delivery problem is recorded in `notifications` — never
+itself emailed, because an alert about a failed alert has nowhere to go.
+
+### What one report contains
+
+Composed entirely from stored evidence for one `run_id`
+(`src/rowanjobs/ops/report.py`), so it can be built long after the run and still
+describe what actually happened. It never re-reads the website. Both a plain
+text and an HTML part are sent, carrying the same facts.
+
+Two things it is careful about:
+
+* **A baseline is not news.** The first qualified collection discovers every
+  advertisement at once. Presenting 133 as "newly published" would be a false
+  claim about the employer's hiring, so newly-observed, no-longer-listed and
+  content-changed counts are reported only for a run that had a baseline to
+  compare against. A baseline report says so on its face.
+* **A delayed report says so.** The collection time is the run's own; the send
+  time is its own. A catch-up is labelled in the subject and at the top of both
+  bodies, and the times shown remain the collection's.
+
+The **Action required** section is the one to read first: it names what a person
+actually has to do, or says `None.`
+
+### Delivery state
+
+One row per run in `notifications`, `UNIQUE(run_id, kind)`, so however many
+times delivery is attempted the operator gets **one** report per run.
+
+| State | Meaning |
+|---|---|
+| `pending` | Composed, not yet accepted by the provider. |
+| `accepted` | The submission server took responsibility for the message. **This is not the same claim as inbox receipt**, and nothing in RowanJobs ever says it is. |
+| `failed` | An attempt failed transiently (timeout, 4xx). It will be retried. |
+| `abandoned` | Permanently rejected (bad App Password, refused recipient, 5xx), or the attempt budget is spent. No further attempts without an explicit ask. |
+| `skipped` | Deliberately not reported. In practice: a run that finished before reporting was ever configured. |
+
+`skipped` exists so that switching reporting on for an archive that already has
+history does not leave every past run looking like a report that went missing —
+and does not post a burst of mail about collections whose outcome the operator
+already knows. The first time a configured RowanJobs sees an archive with no
+delivery history, it records the existing runs as `skipped` and starts from the
+current run.
+
+### `rowanjobs notify`
+
+Delivers whatever reporting still owes. **It never collects**: no run is
+created, the source is never contacted, and its worst case is a late email.
+
+```sh
+rowanjobs notify                 # retry reports composed but never accepted
+rowanjobs notify --catch-up      # also compose reports for runs that got none
+rowanjobs notify --run 7         # send run 7's report even if skipped/abandoned
+rowanjobs notify --test          # prove the credential and route; records nothing
+```
+
+`--test` is a connectivity check, not evidence about a collection, so it is
+deliberately **not** recorded in `notifications` next to real run reports.
+
+`--catch-up` marks everything it composes as delayed, and suppresses the
+predates-reporting marker on first use — otherwise it would silence the very
+runs you just asked for.
+
+### When reports stop arriving
+
+`status` reports notification health **separately from collection health**, and
+counts the one failure mode a delivery table cannot otherwise see: silence.
+
+```sh
+rowanjobs status --json | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["notifications"], indent=2))'
+```
+
+* `UNCONFIGURED` — no `kind`/`recipient`. Nothing is sent, by choice.
+* `FAILED` — the credential file is missing, is not mode 0600, sits in a
+  directory other accounts can enter, or a report was abandoned. `rowanjobs
+  doctor` fails on this; an unconfigured destination is only a note.
+* `DEGRADED` — reports await retry, or `unreported_runs` is non-empty: a
+  collection completed and no report was ever composed for it. Run
+  `rowanjobs notify --catch-up`.
+* `VERIFIED` — the last report was accepted by the provider. Read that as
+  written: acceptance, not receipt.
+
+Nothing here can be inferred from mail alone, which is the point of recording it
+in the archive. If the host is down, no report arrives and no local state says
+so — host-down detection needs an external observer (see below).
+
+---
+
 ## Reading `rowanjobs status`
 
 ```sh
@@ -380,15 +481,17 @@ archive.
 ## The health JSON contract
 
 `rowanjobs --json status` and `<data_root>/runtime/health.json` share one
-structure, versioned by `HEALTH_SCHEMA_VERSION` (currently `"1"`), defined in
-`src/rowanjobs/ops/health.py`.
+structure, versioned by `HEALTH_SCHEMA_VERSION` (currently `"2"`), defined in
+`src/rowanjobs/ops/health.py`. Version 2 replaced the `notifications` section's
+alerting stub with run reporting: it now carries per-state delivery counts and
+the run ids that completed with no report at all.
 
 Collection health, archive integrity, local backup health and off-host
 protection are reported **separately**, because they fail independently and
 collapsing them would hide exactly the failure an operator needs to see.
 
 ```
-health_schema_version   "1"
+health_schema_version   "2"
 application             "rowanjobs"
 app_version             e.g. "1.0.0"
 generated_at_utc        ISO-8601 Z
@@ -461,8 +564,21 @@ backup
                                    detail, kind, target
   restore_verification             the last full restore check, or null
 
-notifications                      state (UNCONFIGURED | CONFIGURED), detail,
-                                   notify_on
+notifications                      reported independently of collection health:
+                                   a bounced report never makes a good harvest
+                                   look bad
+  state                            UNCONFIGURED | CONFIGURED | VERIFIED |
+                                   DEGRADED | FAILED
+  detail                           one sentence naming the reason
+  recipient                        configured destination, or null
+  policy                           "a report after every actual collection run"
+  pending, failed, abandoned       delivery counts by state
+  unreported_runs[]                run ids that completed and were never
+                                   reported at all — the silence case
+  last_accepted                    run_id, accepted_at_utc/local, message_id,
+                                   or null
+  note                             "acceptance by the provider is not the same
+                                   claim as inbox receipt"
 
 schedule                           configured_expression, timezone,
                                    calendar_validation, lingering{enabled,
@@ -554,6 +670,8 @@ project.
 |---|---|---|
 | After any config or code change | `rowanjobs doctor` | All checks ok; schema current; journal mode as expected |
 | Daily (or on alert) | `rowanjobs status` | `HEALTHY`, a recent qualified discovery, no new coverage gaps |
+| Daily | the run report in your inbox | It arrives at all; **Action required** says `None.`; the advertised count is plausible. No report arriving is itself a signal — the host may be down, which nothing local can tell you |
+| When a report did not arrive | `rowanjobs notify` | Resends anything composed but never accepted. `notifications` in `status --json` names the reason; `--catch-up` covers a run that was never reported at all |
 | Weekly | `rowanjobs verify` | `integrity_check` ok, no FK violations, all payload hashes verify |
 | Weekly (automatic) | restore verification | Driven by `backup.restore_check_interval_days`; result in `runtime/restore-verification.json` |
 | After a deployment | `rowanjobs record-deployment --note "..."` | The manifest and `deployments` row are written |

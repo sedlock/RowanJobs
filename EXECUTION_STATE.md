@@ -177,12 +177,69 @@ scope). Verified live: 6 advertisements re-read under the new lineage produced
 **zero** content-change events. The next full collection will re-extract the
 remaining 127 under 1.1.0 — expected, and not a source change.
 
+## Run reporting by email (2026-09-18)
+
+Unattended alerting is no longer `BLOCKED_EXTERNAL`. A Gmail App Password was
+supplied by the operator and RowanJobs now emails a status report after every
+actual collection run.
+
+| Fact | Value |
+|---|---|
+| Recipient | the operator's personal mailbox, set in `~/.config/rowanjobs/config.toml` **only** — deliberately not written down in this repository, which is public |
+| Credential | `~/.config/rowanjobs/credentials.env`, mode 0600, outside Git |
+| Transport | `smtp.gmail.com:587`, STARTTLS with certificate verification |
+| Schema | migration 7 adds `notifications`; production is at **v7** |
+| Health contract | `HEALTH_SCHEMA_VERSION` bumped `1` -> `2` (the notifications section changed shape) |
+| Live delivery test | `rowanjobs notify --test` accepted by Gmail, 2026-09-18 |
+
+Design decisions worth not relitigating:
+
+* **The recipient is not in the committed defaults.** `sedlock/RowanJobs` is
+  public; a personal address in `config.py` would be published and scraped.
+  `NotifyConfig.kind` and `.recipient` default to empty, so the shipped code
+  reports UNCONFIGURED and the operator's own (untracked) config supplies both.
+* **Reporting cannot change a collection's verdict.** `exit_code_for` reads only
+  `collection` and `backup`; a bounced report is recorded in `notifications` and
+  never emailed about itself. Pinned by tests at both the unit and CLI level.
+* **Provider acceptance is not inbox receipt**, and no string anywhere claims it
+  is. `notifications.accepted_at_utc` means Gmail took the message.
+* **Runs predating reporting are recorded `skipped`**, not left looking like
+  reports that went missing. Runs 1-5 were marked this way on first use. Only
+  `rowanjobs notify --run N` will send one after the fact.
+* **A baseline is not news.** Newly-observed / no-longer-listed / content-changed
+  counts are omitted for a baseline run, which would otherwise report 133
+  advertisements as newly published.
+* **`rowanjobs notify` never collects.** No run is created and the source is
+  never contacted; the worst case of any mail problem is a late email.
+
+## Incident: 2026-09-18 collection failed on a half-finished config change
+
+The previous session rewrote `NotifyConfig` without updating the deployed
+`config.toml`, which still had the old `command` / `notify_on` keys. The loader
+rejects unknown keys, so:
+
+* `rowanjobs.service` failed at 06:15 EDT, exit 5,
+  `unknown configuration key [notify] 'command'`;
+* `rowanjobs-retry.service` failed the same way at 09:15 EDT;
+* **no run row was created at all** — the process died before opening one, so
+  the archive had no evidence for 2026-09-18 and not even a failed-run record.
+
+Repaired by finishing the feature and rewriting the live `[notify]` block. A
+`daily` collection for slot 2026-09-18 was then run through the systemd unit, so
+the day is covered rather than becoming a permanent gap.
+
+Worth remembering: **a config schema change is a deployment**. The loader's
+strictness is correct — it is what made the breakage loud — but the deployed
+file has to move in the same change as the dataclass.
+
 ## Remaining
 
-- Off-host backup and unattended alerting remain `BLOCKED_EXTERNAL`: nothing is
-  configured on this host and RowanJobs will not invent a destination. The
-  configuration interfaces exist (`[backup] offhost_kind/offhost_target`,
-  `[notify] kind/command`).
+- Off-host backup remains `BLOCKED_EXTERNAL`: nothing is configured on this host
+  and RowanJobs will not invent a destination. The configuration interface
+  exists (`[backup] offhost_kind/offhost_target`).
+- Host-down detection is still `BLOCKED_EXTERNAL by design`. Run reports make
+  silence *meaningful* — no report means no collection — but a host that is down
+  cannot report that it is down. Only an external observer can close this.
 - The root filesystem is at 87% used (~17 GiB free). The archive grows roughly
   2 MB a day, so this is not urgent, but it is the disk the data root lives on.
 - `sedlock/RowanJobs` is **public**. It existed before this work and its

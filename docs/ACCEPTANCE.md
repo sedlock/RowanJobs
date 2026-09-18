@@ -5,13 +5,13 @@ number could not be measured it says so; nothing here is an estimate.
 
 | Field | Value |
 |---|---|
-| Report date | 2026-09-16 (Eastern) |
+| Report date | 2026-09-16 (Eastern); run reporting added and measured 2026-09-18 |
 | Application version | `1.0.0`, parser `1.1.0` (`src/rowanjobs/__init__.py`) |
 | Git revision at first harvest | `d3679f3` as recorded in `runtime/deployment.json`. Commit authorship was later corrected to the repository's configured identity before the first push, so that hash no longer resolves; the same tree is `b8be440` |
 | Git revision at report | `b93d9fe` |
 | Host / user | `entropy` (Ubuntu 24.04.4), `sedlock` |
 | Data root | `~/.local/share/rowanjobs/` |
-| Database | `~/.local/share/rowanjobs/rowanjobs.db`, schema v6 |
+| Database | `~/.local/share/rowanjobs/rowanjobs.db`, schema v7 |
 
 ## Status vocabulary
 
@@ -48,7 +48,9 @@ A requirement is never marked `VERIFIED` on the strength of a code reading.
 | 1.16 | Backups taken, verified and rotated | VERIFIED | 4 snapshots with manifests; `integrity_check`, `foreign_key_check` and checksum verified on each |
 | 1.17 | A snapshot restores to a separate location and queries correctly | VERIFIED | `rowanjobs verify --restore` and `rowanjobs restore`: 7/7 checks passed; the restored copy answers `show 501826`; restoring over the live archive is refused |
 | 1.18 | Off-host protection | BLOCKED_EXTERNAL | No off-host destination exists on this host (no rclone/restic/borg/b2/aws, no ssh remotes). The configuration interface is implemented; protection reports `UNCONFIGURED` rather than being assumed |
-| 1.19 | Unattended alerting | BLOCKED_EXTERNAL | No established alert destination for this project. Reported `UNCONFIGURED`; RowanJobs will not borrow another application's credentials |
+| 1.19 | Unattended alerting | VERIFIED | Run reporting by email, added 2026-09-18 once the operator supplied a Gmail App Password. `rowanjobs notify --test` accepted by `smtp.gmail.com`; run 6's report accepted and recorded in `notifications`. See §6 |
+| 1.19a | A failed report never changes a collection's verdict | VERIFIED | `exit_code_for` reads only `collection` and `backup`. Pinned by tests at unit level and end to end: a collection whose report is rejected still exits 0 with outcome `success` |
+| 1.19b | Provider acceptance is not reported as inbox receipt | VERIFIED | `accepted_at_utc` means the submission server took the message; every surface that shows it carries the note. No string in the codebase claims delivery |
 | 1.20 | Host-down detection | BLOCKED_EXTERNAL by design | Requires an external observer; a local timer cannot report while the host is unavailable |
 | 1.21 | Exports carry provenance and neutralise CSV formulas | VERIFIED | 133-row CSV export: provenance header present, zero cells a spreadsheet would evaluate |
 | 1.22 | SSRF guard refuses non-public and non-allowlisted destinations | VERIFIED | Loopback, link-local metadata, `::1`, `file://`, off-allowlist hosts and embedded credentials all refused — loopback refused even when explicitly allowlisted |
@@ -136,8 +138,10 @@ killed; run 2 marked it `aborted` and preserved its evidence.
 
 ## 5. Known limitations
 
-* Off-host backup and unattended alerting are unconfigured; both report their
-  state rather than being assumed. See §1.18 and §1.19.
+* Off-host backup is unconfigured and reports its state rather than being
+  assumed. See §1.18.
+* Run reports prove a collection happened; they cannot prove the host is up. A
+  host that is down sends nothing and says nothing — §1.20 stands.
 * The source is fronted by AWS WAF. Collection is paced conservatively and
   obtains an access token the way a visitor's browser does; if that becomes
   unavailable the collector backs off and records challenges as coverage

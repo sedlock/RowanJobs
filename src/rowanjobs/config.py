@@ -133,16 +133,33 @@ class BackupConfig:
 
 @dataclass(slots=True)
 class NotifyConfig:
-    """Operational alerting.
+    """Run reporting by email.
 
-    Left unconfigured on purpose: RowanJobs will not borrow another
-    application's credentials or invent a recipient. When ``kind`` is empty the
-    health output reports notifications as UNCONFIGURED and nothing is sent.
+    Policy: a terminal status report after **every actual collection run** --
+    successful, partial, failed, a recovery attempt that really collected, or a
+    manual run. A retry window that finds nothing to do sends nothing, and
+    neither do the health and status commands.
+
+    Both the destination and the credential are deliberately absent from the
+    committed defaults. RowanJobs will not invent a recipient, so ``kind`` and
+    ``recipient`` are empty here and reporting is UNCONFIGURED until the
+    operator sets them in their own config file -- which is not in Git, and
+    so cannot publish a personal address. The App Password lives in a separate
+    0600 file, never in either.
     """
 
-    kind: str = ""  # '', 'command'
-    command: tuple[str, ...] = ()
-    notify_on: tuple[str, ...] = ("failed", "partial")
+    kind: str = ""  # '' disables reporting entirely; 'smtp' enables it
+    recipient: str = ""
+    sender: str = ""  # defaults to the authenticated SMTP account
+    sender_name: str = "RowanJobs"
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_timeout_seconds: float = 30.0
+    credentials_path: str = "~/.config/rowanjobs/credentials.env"
+    # Mail-only retries: a provider outage costs a later email, never a re-run.
+    max_attempts: int = 5
+    # Shown in the report when ControlPanel is reachable.
+    controlpanel_url: str = ""
 
 
 @dataclass(slots=True)
