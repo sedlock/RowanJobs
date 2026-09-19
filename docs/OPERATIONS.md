@@ -76,6 +76,161 @@ work) is exhausted.
 
 ---
 
+## Deployment: what production actually runs
+
+**Production does not run this working tree.** It runs a sealed, read-only
+release directory named for its commit:
+
+```
+/mnt/bench/app-releases/rowanjobs/<sha>/     the exported tree and its own .venv
+/mnt/bench/app-releases/rowanjobs/current    -> the release the units execute
+/mnt/bench/app-releases/rowanjobs/previous   -> the rollback target
+.activation-journal.jsonl                    every activation, with its reason
+```
+
+This exists because of a specific failure. Until 2026-09-19 the units executed
+`/mnt/bench/src/RowanJobs/.venv/bin/rowanjobs`, an **editable** install pointing
+at the checkout, so the 06:15 collection ran whatever happened to be on disk at
+06:15 — including a half-finished edit. On 2026-09-18 a configuration-schema
+change landed in the tree without the matching deployed config, and the next two
+scheduled activations exited 5 before they could record anything.
+
+RowanJobs owns this runtime. ControlPanel observes it and never repoints it.
+
+### The commands
+
+```sh
+python3 ops/release.py status      # what is deployed, and what the units run
+python3 ops/release.py build HEAD  # export, build, validate, seal
+python3 ops/release.py deploy HEAD # build then activate
+python3 ops/release.py verify      # prove the units execute the current release
+python3 ops/release.py rollback    # return to `previous`
+python3 ops/release.py prune       # drop old releases (never current/previous)
+```
+
+`status` deliberately reports the deployed commit **and** the development HEAD
+separately, because they are different facts and conflating them is how nobody
+notices that production is three commits behind.
+
+### What a candidate must prove before anything points at it
+
+A release is built from a **commit**, not from the working tree, so a dirty
+checkout cannot become production by accident. Before the manifest is written
+the candidate must:
+
+1. **start** — `rowanjobs --version` runs;
+2. **import** — the package and collector import cleanly;
+3. **load the deployed configuration** — the candidate reads the *actual*
+   `config.toml` the service will hand it. This is the check that would have
+   caught 2026-09-18, and it is tested against that exact config shape;
+4. **emit the status contract** — `rowanjobs health` produces
+   `controlpanel.status.v1`.
+
+Every check then runs **again** after sealing, at the release's final path. The
+first real build passed validation and still produced an unrunnable binary: a
+virtualenv's console scripts embed the interpreter's absolute path in their
+shebang, so a release built in a staging directory and renamed points at a path
+that no longer exists. Releases are now built where they will run.
+
+The interpreter is pinned (`.python-version`, and explicitly at build time).
+Left to itself, uv chose Python 3.14 for the first release while every test in
+this project runs on 3.12.
+
+### Activation
+
+Under a deploy lock, and only when no collection holds the collector's own lock
+— a harvest is never switched underneath itself. Then: back up, migrate with
+the candidate, repoint `current`, write the drop-ins, reload, re-enable the
+timers, verify the units really execute the release, and smoke-test health.
+
+**Any failure restores the previous release** and records why in the activation
+journal. An interrupted preparation leaves the known-good release in charge,
+because a release is only a release once its `READY` manifest is written, and
+that is written last.
+
+Activating a release **older than the applied schema is refused**. Rolling back
+code is not rolling back a database: old code against a migrated archive cannot
+read its own evidence. `--allow-schema-regression` exists for when you have a
+restore plan, and demands you say so.
+
+### After deploying
+
+```sh
+python3 ops/release.py verify
+rowanjobs health | python3 -m json.tool | head -20
+systemctl --user list-timers 'rowanjobs*'
+```
+
+---
+
+## When a unit fails before it can record anything
+
+The collection tables can only describe runs that started. A unit that dies
+during startup — a bad config, a missing interpreter, a broken release — leaves
+no run row, so every collection-derived number still looks correct and the
+archive has nothing to report. That is precisely how 2026-09-18 stayed
+invisible until someone read the journal.
+
+`OnFailure=rowanjobs-failure@%n.service` on both collecting units closes it.
+The handler (`ops/onfailure.py`) is **standard-library only and imports nothing
+from rowanjobs**, because a detector that depends on the configuration parser it
+is monitoring cannot report that the parser is broken. It:
+
+1. appends a durable record to `<data_root>/runtime/startup-failures.jsonl`;
+2. best-effort emails the failure, clearly labelled as a startup failure.
+
+The record is **operational evidence, never archive evidence**. It lives in
+`runtime/`, it never implies a source observation occurred, and it says so in
+its own `note` field.
+
+`rowanjobs health` surfaces unresolved records as the `startup-integrity`
+component. A failure is resolved **only by a later collection for the same
+scheduled slot** — not by time passing and not by the next day succeeding.
+Resolving it does not erase it: the record stays on disk, and the day keeps
+whatever coverage it actually had.
+
+```sh
+cat ~/.local/share/rowanjobs/runtime/startup-failures.jsonl | python3 -m json.tool
+rowanjobs health | python3 -c 'import json,sys; d=json.load(sys.stdin); print([c for c in d["components"] if c["id"]=="startup-integrity"])'
+```
+
+---
+
+## ControlPanel
+
+RowanJobs is a registered ControlPanel target. The console runs
+
+```sh
+/mnt/bench/app-releases/rowanjobs/current/.venv/bin/rowanjobs health
+```
+
+once a minute and reads the `controlpanel.status.v1` document it prints.
+
+That command opens the archive **read-only**, so "monitoring cannot change what
+it monitors" is a property of the connection rather than a promise in a
+docstring. It never collects, never sends mail, never migrates, and never
+writes. `status --json` is unchanged and remains the archive's own contract.
+
+Two scoring decisions are deliberate:
+
+* **Off-host protection is reported as evidence on the local-snapshot
+  component, not as a component of its own.** ControlPanel rolls components up
+  with `max()`, so publishing an `unknown` off-host component held the entire
+  project at unknown on its first collection — masking nine healthy components
+  behind one the operator had already decided not to care about.
+* **Mail trouble is `degraded`, never `failed`.** A report that did not arrive
+  is a real problem, but the harvest it describes still happened.
+
+A linked document the source answers 404 for is recorded as evidence rather
+than scored as a fault. An employer linking a PDF that does not exist is a fact
+this archive captures faithfully on every run; a console that is permanently
+slightly unwell is one nobody reads.
+
+**Collection does not depend on ControlPanel.** If the console is down,
+stopped, or uninstalled, the 06:15 timer collects exactly as before.
+
+---
+
 ## Run reporting
 
 A status report is emailed after **every actual collection run** — successful,
@@ -129,9 +284,16 @@ times delivery is attempted the operator gets **one** report per run.
 `skipped` exists so that switching reporting on for an archive that already has
 history does not leave every past run looking like a report that went missing —
 and does not post a burst of mail about collections whose outcome the operator
-already knows. The first time a configured RowanJobs sees an archive with no
-delivery history, it records the existing runs as `skipped` and starts from the
-current run.
+already knows.
+
+**Only runs that ended before reporting existed are eligible**, where "existed"
+means the moment migration 7 created the `notifications` table, read from
+`schema_migrations`. The earlier rule — "the delivery table is empty" — was
+ambiguous in a way that mattered: emptiness is equally consistent with
+*reporting is brand new* and with *the very first report was genuinely lost*,
+and treating the second as the first would silently write off a real missed
+report. A run that finished after the epoch and still has no report stays
+visible as an unreported run, however empty the table happens to be.
 
 ### `rowanjobs notify`
 
@@ -144,6 +306,13 @@ rowanjobs notify --catch-up      # also compose reports for runs that got none
 rowanjobs notify --run 7         # send run 7's report even if skipped/abandoned
 rowanjobs notify --test          # prove the credential and route; records nothing
 ```
+
+**`rowanjobs-notify.timer` runs the first of these hourly at :40**, clear of the
+06:15 / 09:15 / 13:15 collection windows. This matters: an implemented retry
+command with no scheduled caller is not a retry policy. Before the timer
+existed, a report that failed to send waited for the next collection to happen
+to sweep it, which is a coincidence rather than a mechanism. A provider outage
+now costs a late report, and recovery never requires a second harvest.
 
 `--test` is a connectivity check, not evidence about a collection, so it is
 deliberately **not** recorded in `notifications` next to real run reports.
@@ -671,7 +840,9 @@ project.
 | After any config or code change | `rowanjobs doctor` | All checks ok; schema current; journal mode as expected |
 | Daily (or on alert) | `rowanjobs status` | `HEALTHY`, a recent qualified discovery, no new coverage gaps |
 | Daily | the run report in your inbox | It arrives at all; **Action required** says `None.`; the advertised count is plausible. No report arriving is itself a signal — the host may be down, which nothing local can tell you |
-| When a report did not arrive | `rowanjobs notify` | Resends anything composed but never accepted. `notifications` in `status --json` names the reason; `--catch-up` covers a run that was never reported at all |
+| When a report did not arrive | `rowanjobs notify` | Resends anything composed but never accepted. The hourly timer already does this; run it by hand only to see the reason immediately. `--catch-up` covers a run that was never reported at all |
+| After any deployment | `python3 ops/release.py verify` | The units execute the release you think they do |
+| Weekly | `rowanjobs health` in ControlPanel | RowanJobs is green, and the numbers match what the daily email said |
 | Weekly | `rowanjobs verify` | `integrity_check` ok, no FK violations, all payload hashes verify |
 | Weekly (automatic) | restore verification | Driven by `backup.restore_check_interval_days`; result in `runtime/restore-verification.json` |
 | After a deployment | `rowanjobs record-deployment --note "..."` | The manifest and `deployments` row are written |

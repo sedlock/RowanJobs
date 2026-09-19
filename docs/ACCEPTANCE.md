@@ -5,7 +5,7 @@ number could not be measured it says so; nothing here is an estimate.
 
 | Field | Value |
 |---|---|
-| Report date | 2026-09-16 (Eastern); run reporting added and measured 2026-09-18 |
+| Report date | 2026-09-16 (Eastern); run reporting 2026-09-18; steady-state stabilization 2026-09-19 |
 | Application version | `1.0.0`, parser `1.1.0` (`src/rowanjobs/__init__.py`) |
 | Git revision at first harvest | `d3679f3` as recorded in `runtime/deployment.json`. Commit authorship was later corrected to the repository's configured identity before the first push, so that hash no longer resolves; the same tree is `b8be440` |
 | Git revision at report | `b93d9fe` |
@@ -51,7 +51,13 @@ A requirement is never marked `VERIFIED` on the strength of a code reading.
 | 1.19 | Unattended alerting | VERIFIED | Run reporting by email, added 2026-09-18 once the operator supplied a Gmail App Password. `rowanjobs notify --test` accepted by `smtp.gmail.com`; run 6's report accepted and recorded in `notifications`. See §6 |
 | 1.19a | A failed report never changes a collection's verdict | VERIFIED | `exit_code_for` reads only `collection` and `backup`. Pinned by tests at unit level and end to end: a collection whose report is rejected still exits 0 with outcome `success` |
 | 1.19b | Provider acceptance is not reported as inbox receipt | VERIFIED | `accepted_at_utc` means the submission server took the message; every surface that shows it carries the note. No string in the codebase claims delivery |
-| 1.20 | Host-down detection | BLOCKED_EXTERNAL by design | Requires an external observer; a local timer cannot report while the host is unavailable |
+| 1.20 | Host-down detection | BLOCKED_EXTERNAL by design | Requires an external observer; a local timer cannot report while the host is unavailable. Run reports make silence meaningful — no daily email means no collection — but a host that is down cannot say so |
+| 1.25 | Production is insulated from the development checkout | VERIFIED | The units executed an editable install of the working tree until 2026-09-19. `ops/release.py` now builds sealed, read-only per-commit releases under `/mnt/bench/app-releases/rowanjobs/`; `release.py verify` confirms all three services execute `current`. An unfinished edit in the checkout cannot reach the 06:15 collection |
+| 1.26 | An invalid candidate cannot replace the working release | VERIFIED | Validation loads the *deployed* `config.toml` with the candidate code. Demonstrated against the exact config shape that broke 2026-09-18: `candidate accepted: False`, `deployed_config_loads` FAIL. Failure paths, interrupted builds, schema regression and rollback are pinned by 14 tests in `tests/test_release.py` |
+| 1.27 | A startup failure is visible and reported | VERIFIED | `OnFailure=` on both collecting units invokes a standard-library-only handler that imports nothing from rowanjobs. Proven end to end with an isolated unit exiting 5: systemd fired the handler, which recorded result, exit status, slot and journal tail, and attempted mail. Production evidence untouched |
+| 1.28 | Mail retry runs automatically | VERIFIED | `rowanjobs-notify.timer`, hourly at :40, clear of the collection windows. Ran from the release: found nothing owed, delivered nothing, exit 0. It never collects |
+| 1.29 | RowanJobs is a tracked ControlPanel application | VERIFIED | Registered in `~/.config/controlpanel/projects.json` and in the ControlPanel repo (`c2fdc05`). A live `controlpanel collect` reports `rowanjobs: healthy (219 ms)` with 13 components and real production values |
+| 1.30 | Health queries cannot change what they observe | VERIFIED | `rowanjobs health` opens the archive read-only. Pinned by a test asserting runs, observations, fetches, notifications and source requests are all unchanged across repeated calls, and that evidence timestamps are the recorded ones rather than the query time |
 | 1.21 | Exports carry provenance and neutralise CSV formulas | VERIFIED | 133-row CSV export: provenance header present, zero cells a spreadsheet would evaluate |
 | 1.22 | SSRF guard refuses non-public and non-allowlisted destinations | VERIFIED | Loopback, link-local metadata, `::1`, `file://`, off-allowlist hosts and embedded credentials all refused — loopback refused even when explicitly allowlisted |
 | 1.23 | Credential-bearing headers redacted | VERIFIED | `SENSITIVE_HEADERS` redaction covers cookies both ways; the WAF token never leaves the httpx cookie jar |
@@ -142,6 +148,9 @@ killed; run 2 marked it `aborted` and preserved its evidence.
   assumed. See §1.18.
 * Run reports prove a collection happened; they cannot prove the host is up. A
   host that is down sends nothing and says nothing — §1.20 stands.
+* The Gmail App Password exposed in a 2026-09-18 session transcript has not
+  been rotated. Mail works, which proves the configured credential works and
+  nothing more. Rotation is a local-only action; see EXECUTION_STATE.md.
 * The source is fronted by AWS WAF. Collection is paced conservatively and
   obtains an access token the way a visitor's browser does; if that becomes
   unavailable the collector backs off and records challenges as coverage

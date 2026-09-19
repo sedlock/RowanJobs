@@ -232,11 +232,99 @@ Worth remembering: **a config schema change is a deployment**. The loader's
 strictness is correct — it is what made the breakage loud — but the deployed
 file has to move in the same change as the dataclass.
 
+## Stabilization pass (2026-09-19)
+
+Steady-state work. The whole pass was driven by one question: what would make
+the 2026-09-18 outage impossible to repeat, or at least impossible to miss?
+
+### Production no longer runs the working tree
+
+This was the real defect, and it was still live at the start of the day. The
+units executed `/mnt/bench/src/RowanJobs/.venv/bin/rowanjobs`, an **editable**
+install pointing at the checkout, so the 06:15 collection ran whatever was on
+disk at 06:15. `ops/release.py` gives RowanJobs its own immutable release
+lifecycle under `/mnt/bench/app-releases/rowanjobs/`, the same shape Feeder
+already uses on this host (deliberately: one pattern to understand, not two).
+
+Two defects the first real build exposed, both worth remembering:
+
+* A virtualenv's console scripts embed the interpreter's **absolute path** in
+  their shebang. The release was built in a staging directory and renamed, so
+  it validated perfectly and then could not execute at all. Releases are built
+  where they will run, and validated again after sealing.
+* Left alone, `uv` chose **Python 3.14** for the release while every test runs
+  on 3.12. Pinned in `.python-version` and passed explicitly at build time.
+
+### A startup failure can no longer be silent
+
+`OnFailure=` on both collecting units invokes `ops/onfailure.py`, which imports
+nothing from rowanjobs — a detector that depends on the configuration parser it
+monitors cannot report that the parser is broken. Verified end to end with an
+isolated unit that exits 5: systemd fired the handler, which captured the
+result, exit status, slot and journal tail. `rowanjobs health` surfaces
+unresolved records; only a later collection **for the same slot** resolves one.
+
+### Mail retry actually runs
+
+`rowanjobs-notify.timer`, hourly at :40. `rowanjobs notify` existed before but
+nothing called it, so a failed report waited for the next collection to happen
+to sweep it.
+
+### ControlPanel
+
+Registered as `rowanjobs` in `~/.config/controlpanel/projects.json` and in the
+ControlPanel repo (`c2fdc05`). Shows 13 components, all healthy, with real
+production values.
+
+One thing worth not relearning: **ControlPanel recomputes a project's verdict
+from the components it publishes, with `max()`.** The internal decision to
+exclude off-host backup from scoring never reached it, so publishing an
+`unknown` off-host component held the whole project at unknown — masking nine
+healthy components behind one the operator had already decided not to care
+about. Off-host is now evidence on the local-snapshot component, not a
+component.
+
+### Reporting epoch
+
+`seed_baseline` used to fire whenever the notifications table was empty.
+Emptiness is ambiguous: it is equally consistent with *reporting is brand new*
+and with *the first report was genuinely lost*. It is now anchored to when
+migration 7 created the table, read from `schema_migrations`. Production
+matches exactly: runs 1-5 ended before `2026-09-18T16:59:10Z` and are
+`skipped`; runs 6-7 ended after and were reported.
+
+### Collection integrity audit
+
+Nothing needed fixing. Measured on the production archive:
+
+| Check | Result |
+|---|---|
+| Postings ever discovered | 137 |
+| With an archived description | **137** (zero never-captured) |
+| Fetches, all with retained payloads | 769 |
+| Content versions / postings with >1 | 275 / 133 |
+| Offline reprocess of 671 artifacts | 0 network requests, **0** new versions |
+| `v_posting_current` freshness | 132 `checked`, 5 `carried-forward` (delisted) |
+
+The 5 `redirected_to_listing` observations in run 7 are historical postings
+being re-checked, not discoveries missing a description. `redirected_to_listing`
+is a **terminal** availability state, so those five are recorded disappearances
+rather than failures to retrieve — which is why `detail_failed` is 0 while
+`detail_attempted` (137) exceeds `detail_captured` (132).
+
 ## Remaining
 
-- Off-host backup remains `BLOCKED_EXTERNAL`: nothing is configured on this host
-  and RowanJobs will not invent a destination. The configuration interface
-  exists (`[backup] offhost_kind/offhost_target`).
+- **The exposed Gmail App Password has not been rotated.** It appeared in a
+  session transcript on 2026-09-18 and `credentials.env` has not been modified
+  since it was written (mtime 2026-09-18 12:46). Mail works, but that only
+  proves the *configured* credential works, not that the exposed one was
+  replaced. Rotation is a local-only action: rotate at
+  <https://myaccount.google.com/apppasswords>, rewrite the file in place
+  (0600), then `rowanjobs notify --test`. Nothing in RowanJobs needs changing.
+- Off-host backup remains unconfigured by operator decision: local snapshots
+  are considered sufficient, and it is explicitly excluded from required-health
+  scoring. The configuration interface exists
+  (`[backup] offhost_kind/offhost_target`).
 - Host-down detection is still `BLOCKED_EXTERNAL by design`. Run reports make
   silence *meaningful* — no report means no collection — but a host that is down
   cannot report that it is down. Only an external observer can close this.

@@ -73,6 +73,7 @@ both work (`src/rowanjobs/cli.py::build_parser`).
 | `collect` | Runs one collection. `--kind daily\|retry\|manual\|verification`, `--max-details`, `--no-verification`, `--no-backup` |
 | `retry` | Bounded same-day retry of an incomplete scheduled collection; keeps the parent's scheduled slot |
 | `status` | Operational health; `--no-timer` skips systemd inspection |
+| `health` | Emits the `controlpanel.status.v1` document ControlPanel consumes (also spelled `rowanjobs --health`). Opens the archive **read-only**: it never collects, sends, migrates or writes |
 | `notify` | Delivers outstanding run reports. **Never collects**: no run is created and the source is never contacted. `--catch-up` composes reports for completed runs that never got one (marked delayed), `--run N` sends one run's report even if it was skipped or abandoned, `--test` proves the credential and route without recording anything |
 | `runs` | Recent runs from `v_run_health`; `--limit` |
 | `show JOB_ID` | One advertisement: freshness, source fields, URLs, links, description; `--full` |
@@ -88,6 +89,20 @@ both work (`src/rowanjobs/cli.py::build_parser`).
 
 Exit codes: `0` success, `1` failed, `2` degraded, `3` protection degraded,
 `4` lock contention, `5` usage/config error (`src/rowanjobs/cli.py`).
+
+## Deployment
+
+Production does not run this working tree. `ops/release.py` builds a sealed,
+read-only release per commit under `/mnt/bench/app-releases/rowanjobs/`, and the
+systemd units execute the `current` symlink — so an unfinished edit in the
+checkout can never become the 06:15 collection. See
+[docs/OPERATIONS.md](docs/OPERATIONS.md#deployment-what-production-actually-runs).
+
+```sh
+python3 ops/release.py status       # deployed commit vs. development HEAD
+python3 ops/release.py deploy HEAD  # build, validate, activate, verify
+python3 ops/release.py rollback     # back to the previous release
+```
 
 ## Where the data lives
 

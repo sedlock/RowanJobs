@@ -113,6 +113,22 @@ def notify_cfg(cfg: Config, credentials_file: Path) -> Config:
     return cfg
 
 
+def predate_reporting(db: Database, *run_ids: int) -> None:
+    """Move runs to before reporting existed.
+
+    Seeding is anchored to when the notifications table was created, so a run
+    collected during a test is by definition *after* the epoch. Tests about
+    pre-existing history have to say so explicitly rather than relying on the
+    delivery table merely being empty.
+    """
+    with db.write():
+        for run_id in run_ids:
+            db.execute(
+                "UPDATE collection_runs SET ended_at_utc = '2000-01-01T00:00:00Z' WHERE run_id = ?",
+                (run_id,),
+            )
+
+
 def make_notifier(cfg: Config, smtp: FakeSMTP) -> Notifier:
     return Notifier(cfg, smtp_factory=lambda *_args: smtp)  # type: ignore[arg-type,return-value]
 
@@ -535,6 +551,7 @@ def test_runs_predating_reporting_are_recorded_as_skipped_not_missing(
 ) -> None:
     old_one = collect(one_job_source, run_kind="daily")
     old_two = collect(one_job_source, run_kind="manual")
+    predate_reporting(db, old_one.run_id, old_two.run_id)
     smtp = FakeSMTP()
     notifier = make_notifier(notify_cfg, smtp)
 
@@ -576,6 +593,7 @@ def test_the_current_run_is_never_marked_as_predating_reporting(
 ) -> None:
     old = collect(one_job_source, run_kind="daily")
     current = collect(one_job_source, run_kind="daily")
+    predate_reporting(db, old.run_id, current.run_id)
     notifier = make_notifier(notify_cfg, FakeSMTP())
 
     notifier.seed_baseline(db, exclude_run_id=current.run_id)
@@ -735,6 +753,7 @@ def test_a_run_written_off_as_predating_reporting_can_still_be_asked_for(
     notify_cfg: Config, db: Database, collect: Callable[..., Any], one_job_source: FakeSource
 ) -> None:
     result = collect(one_job_source, run_kind="daily")
+    predate_reporting(db, result.run_id)
     smtp = FakeSMTP()
     notifier = make_notifier(notify_cfg, smtp)
     notifier.seed_baseline(db)
@@ -816,6 +835,7 @@ def test_delivering_a_settled_row_sends_nothing_without_an_explicit_ask(
     notify_cfg: Config, db: Database, collect: Callable[..., Any], one_job_source: FakeSource
 ) -> None:
     result = collect(one_job_source, run_kind="daily")
+    predate_reporting(db, result.run_id)
     smtp = FakeSMTP()
     notifier = make_notifier(notify_cfg, smtp)
     notifier.seed_baseline(db)
@@ -887,3 +907,58 @@ def test_an_uncertain_retrieval_is_never_described_as_a_disappearance(
 
     assert "could not be checked" in line
     assert "no longer published" not in line
+
+
+def test_a_report_missed_after_reporting_existed_is_never_written_off_as_history(
+    notify_cfg: Config, db: Database, collect: Callable[..., Any], one_job_source: FakeSource
+) -> None:
+    """Emptiness is ambiguous; the reporting epoch is not.
+
+    A delivery table can be empty because reporting is brand new, or because
+    the very first report was genuinely lost. Writing the second off as the
+    first would silently discard a real missed report.
+    """
+    result = collect(one_job_source, run_kind="daily")
+    notifier = make_notifier(notify_cfg, FakeSMTP())
+    epoch = notifier.reporting_epoch(db)
+    assert epoch is not None
+
+    # This run finished after reporting existed, and nothing reported it.
+    with db.write():
+        db.execute(
+            "UPDATE collection_runs SET ended_at_utc = ? WHERE run_id = ?",
+            ("9999-01-01T00:00:00Z", result.run_id),
+        )
+
+    assert notifier.seed_baseline(db) == 0
+    assert db.scalar("SELECT COUNT(*) FROM notifications") == 0
+    assert [int(r["run_id"]) for r in notifier.unreported_runs(db)] == [result.run_id]
+    assert notifier.status(db)["state"] == "DEGRADED"
+
+
+def test_only_runs_older_than_the_reporting_epoch_are_marked_as_predating_it(
+    notify_cfg: Config, db: Database, collect: Callable[..., Any], one_job_source: FakeSource
+) -> None:
+    old_run = collect(one_job_source, run_kind="daily")
+    recent_run = collect(one_job_source, run_kind="daily")
+    notifier = make_notifier(notify_cfg, FakeSMTP())
+    epoch = notifier.reporting_epoch(db)
+
+    with db.write():
+        db.execute(
+            "UPDATE collection_runs SET ended_at_utc = '2000-01-01T00:00:00Z' WHERE run_id = ?",
+            (old_run.run_id,),
+        )
+        db.execute(
+            "UPDATE collection_runs SET ended_at_utc = ? WHERE run_id = ?",
+            ("9999-01-01T00:00:00Z", recent_run.run_id),
+        )
+
+    assert notifier.seed_baseline(db) == 1
+    states = {
+        int(r["run_id"]): str(r["state"])
+        for r in db.query("SELECT run_id, state FROM notifications", ())
+    }
+    assert states == {old_run.run_id: "skipped"}
+    assert epoch is not None
+    assert [int(r["run_id"]) for r in notifier.unreported_runs(db)] == [recent_run.run_id]

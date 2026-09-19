@@ -441,6 +441,22 @@ class Notifier:
         )
         return [self.deliver(db, int(r["notification_id"]), schedule=schedule) for r in rows]
 
+    def reporting_epoch(self, db: Database) -> str | None:
+        """When reporting became possible at all: when its table was created.
+
+        Anchoring to durable evidence rather than to "the delivery table is
+        empty" matters. Emptiness is ambiguous -- it is equally consistent with
+        "reporting is brand new" and with "the very first report was genuinely
+        lost". Treating the second as the first would silently write off a real
+        missed report, which is the one thing a delivery record exists to
+        prevent.
+        """
+        row = db.one(
+            "SELECT applied_at_utc FROM schema_migrations WHERE name = 'notifications' "
+            "ORDER BY version LIMIT 1"
+        )
+        return str(row["applied_at_utc"]) if row else None
+
     def seed_baseline(self, db: Database, *, exclude_run_id: int | None = None) -> int:
         """Record runs that finished before reporting existed as deliberately skipped.
 
@@ -450,14 +466,22 @@ class Notifier:
         already knows the outcome of. A ``skipped`` row states the truth
         instead: reporting began at a point in time, and these runs precede it.
 
-        Only ever runs against an archive with no delivery history at all, so it
-        cannot silence a report that was genuinely due.
+        Only runs that ended **before that point** are eligible. A run that
+        finished after reporting existed and still has no report is a genuine
+        gap, and stays visible as one however empty this table happens to be.
         """
         if not self.configured:
             return 0
         if int(db.scalar("SELECT COUNT(*) FROM notifications") or 0):
             return 0
-        rows = self.unreported_runs(db, limit=None, exclude_run_id=exclude_run_id)
+        epoch = self.reporting_epoch(db)
+        if epoch is None:  # pragma: no cover - the table exists by definition
+            return 0
+        rows = [
+            row
+            for row in self.unreported_runs(db, limit=None, exclude_run_id=exclude_run_id)
+            if str(row["ended_at_utc"]) < epoch
+        ]
         if not rows:
             return 0
         now = utc_str()
