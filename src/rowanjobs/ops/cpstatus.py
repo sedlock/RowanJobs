@@ -361,6 +361,8 @@ def build_status(cfg: Config, db: Database, *, include_timer: bool = True) -> di
 
     # -------------------------------------------------------------- backup
     local_backup = backup.get("local") or {}
+    offhost = backup.get("offhost") or {}
+    offhost_state = str(offhost.get("state"))
     components.append(
         _component(
             "local-backup",
@@ -371,22 +373,17 @@ def build_status(cfg: Config, db: Database, *, include_timer: bool = True) -> di
                 ("State", local_backup.get("state")),
                 ("Snapshots", local_backup.get("snapshot_count")),
                 ("Total", _mib(local_backup.get("total_bytes"))),
+                # Off-host protection is reported here as evidence rather than
+                # as its own component, by operator decision: local snapshots
+                # are sufficient for this archive. A component would be scored
+                # -- ControlPanel rolls components up with max(), so an
+                # UNKNOWN one would hold the whole project at unknown forever,
+                # which is the opposite of informative.
+                ("Off-host protection", offhost_state),
+                ("Off-host target", offhost.get("target")),
             ],
         )
     )
-    offhost = backup.get("offhost") or {}
-    components.append(
-        _component(
-            # Excluded from the overall verdict by operator decision: local
-            # snapshots are considered sufficient here. Reported, not scored.
-            "offhost-backup",
-            "Off-host protection",
-            UNKNOWN if str(offhost.get("state")) == "UNCONFIGURED" else HEALTHY,
-            str(offhost.get("detail")),
-            evidence=[("State", offhost.get("state")), ("Target", offhost.get("target"))],
-        )
-    )
-
     # ------------------------------------------------------------ schedule
     units = schedule.get("units") or {}
     daily_unit = units.get("rowanjobs.timer") or {}
@@ -414,12 +411,8 @@ def build_status(cfg: Config, db: Database, *, include_timer: bool = True) -> di
             )
         )
 
-    overall_health = _worst(components, exclude={"offhost-backup"})
-    degraded_names = [
-        c["name"]
-        for c in components
-        if c["id"] != "offhost-backup" and c["health"] in (DEGRADED, FAILED)
-    ]
+    overall_health = _worst(components, exclude=set())
+    degraded_names = [c["name"] for c in components if c["health"] in (DEGRADED, FAILED)]
     overall_summary = _summarise(
         overall_health, collection, scheduled, listed, startup, degraded_names
     )
@@ -447,6 +440,7 @@ def build_status(cfg: Config, db: Database, *, include_timer: bool = True) -> di
             "unresolved_startup_failures": len(startup["unresolved"]),
             "reports_awaiting_retry": notifications.get("failed"),
             "archive_bytes": archive.get("database_bytes"),
+            "offhost_backup_state": offhost_state,
         },
         "recent_runs": _recent_runs(db),
         "errors": [],
@@ -466,8 +460,8 @@ def build_status(cfg: Config, db: Database, *, include_timer: bool = True) -> di
             "never required.",
             "A host that is down cannot report that it is down. Absence of a daily "
             "report is itself the signal.",
-            "Off-host protection is reported but deliberately excluded from the overall "
-            "verdict, by operator decision.",
+            "Off-host protection is reported as evidence on the local-snapshot "
+            "component and deliberately not scored, by operator decision.",
         ],
     }
 

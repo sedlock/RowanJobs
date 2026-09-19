@@ -294,14 +294,25 @@ def test_a_missing_off_host_backup_does_not_lower_required_health(
     the fixture archive.
     """
     collect(one_job_source, run_kind="daily")
+    # Configured the way production is, so the only remaining candidate for an
+    # "unknown" component would be off-host protection.
+    cfg.notify.kind = "smtp"
+    cfg.notify.recipient = "operator@example.com"
 
     document = status(cfg, db)
-    rank = {"healthy": 0, "running": 0, "unknown": 1, "degraded": 2, "failed": 3}
-    others = [c["health"] for c in document["components"] if c["id"] != "offhost-backup"]
 
-    assert component(document, "offhost-backup")["health"] == "unknown"
-    assert document["overall"]["health"] == max(others, key=lambda h: rank[h])
-    assert rank[document["overall"]["health"]] <= rank["degraded"]
+    # It is not a component at all, so nothing can score it. ControlPanel rolls
+    # components up with max(), so an UNKNOWN component would hold the whole
+    # project at unknown permanently -- which is exactly how it first behaved
+    # when this was published as a component.
+    assert [c for c in document["components"] if c["id"] == "offhost-backup"] == []
+    backup_evidence = {
+        e["label"]: e["value"] for e in component(document, "local-backup")["evidence"]
+    }
+    assert backup_evidence["Off-host protection"] == "UNCONFIGURED"
+    assert document["metrics"]["offhost_backup_state"] == "UNCONFIGURED"
+    unknown = [c["id"] for c in document["components"] if c["health"] == "unknown"]
+    assert unknown == [], f"unscoreable components remain: {unknown}"
 
 
 def test_mail_trouble_is_degraded_but_never_failed(
