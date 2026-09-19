@@ -172,7 +172,7 @@ status rather than pretended delivery.
 | `smtp_timeout_seconds` | `30.0` | Per-attempt socket timeout. |
 | `credentials_path` | `"~/.config/rowanjobs/credentials.env"` | The App Password file. Must be mode **0600** in a directory no other account can enter, or delivery fails and `doctor` reports it. |
 | `max_attempts` | `5` | Delivery attempts before a report is `abandoned`. Mail-only: this never re-runs a collection. |
-| `controlpanel_url` | `""` | Optional link included in the report. |
+| `controlpanel_url` | `""` | Optional link included in the report. On entropy this is `https://entropy/projects/rowanjobs`; set it only to a URL you have verified serves, since a dead link in a status email is worse than no link. |
 
 ### The credential file
 

@@ -274,7 +274,17 @@ to sweep it.
 
 Registered as `rowanjobs` in `~/.config/controlpanel/projects.json` and in the
 ControlPanel repo (`c2fdc05`). Shows 13 components, all healthy, with real
-production values.
+production values. The daily report links to
+`https://entropy/projects/rowanjobs`, verified serving HTTP 200 before it was
+put in an email.
+
+Note for the next config change: editing the deployed `config.toml` after a
+release is validated re-opens exactly the 2026-09-18 failure mode. After any
+config edit, re-run the candidate check against the *deployed* release:
+
+```sh
+python3 -c "import importlib.util;spec=importlib.util.spec_from_file_location('r','ops/release.py');r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r);l=r.Layout(r.DEFAULT_ROOT);print(r.validate_candidate(l.path_for(l.resolve(l.current)), r.DEFAULT_CONFIG))"
+```
 
 One thing worth not relearning: **ControlPanel recomputes a project's verdict
 from the components it publishes, with `max()`.** The internal decision to
