@@ -80,6 +80,12 @@ REQUIRED_TREE = (
     "ops/systemd",
 )
 
+#: Production must run the interpreter the tests ran on. Without pinning, uv
+#: picks the newest it can find -- it chose 3.14 for the first build while every
+#: test in this project runs on 3.12, which is precisely the kind of difference
+#: that only shows up in production. Also recorded in `.python-version`.
+PYTHON_VERSION = "3.12"
+
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DEFAULT_KEEP = 8
 DEFAULT_DRAIN_SECONDS = 4 * 3600  # a full harvest paces itself for ~12 minutes
@@ -367,7 +373,13 @@ def build(
         log(f"discarding an unsealed or forced rebuild at {target}")
         _discard(target)
 
-    staging = layout.root / f".building-{commit[:12]}-{os.getpid()}"
+    # Built directly at its final path, not in a staging directory that is
+    # renamed afterwards: a virtualenv's console scripts embed the absolute
+    # interpreter path in their shebang, so a renamed venv produces a binary
+    # that cannot execute at all. `is_sealed` -- a READY manifest, written last
+    # -- is what distinguishes a finished release from rubble, so the rename
+    # was never what made this safe.
+    staging = target
     _discard(staging)
     staging.mkdir(parents=True)
     try:
@@ -392,10 +404,20 @@ def build(
         if missing:
             raise ReleaseError(f"the exported tree is missing {missing}")
 
-        log("building the locked environment (no editable install)")
+        log(f"building the locked environment on python {PYTHON_VERSION} (no editable install)")
         env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(staging / VENV_RELPATH)}
         run(
-            ["uv", "sync", "--frozen", "--no-dev", "--extra", "browser", "--no-editable"],
+            [
+                "uv",
+                "sync",
+                "--frozen",
+                "--no-dev",
+                "--extra",
+                "browser",
+                "--no-editable",
+                "--python",
+                PYTHON_VERSION,
+            ],
             cwd=str(staging),
             env=env,
             timeout=2400,
@@ -419,6 +441,7 @@ def build(
             "contained_in_origin_main": pushed,
             "allow_dirty": allow_dirty,
             "schema_version": schema_version_of(staging / BINARY_RELPATH),
+            "python_version": PYTHON_VERSION,
             "validation": report,
             "build_status": "READY",
         }
@@ -426,7 +449,16 @@ def build(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         _seal(staging)
-        staging.rename(target)
+        # Re-run the checks against the sealed tree at its final path. The first
+        # build passed validation and then produced an unrunnable binary,
+        # because everything had been proven somewhere the release no longer
+        # was. Prove it where it will actually run.
+        final = validate_candidate(target, config)
+        if not final["ok"]:
+            raise ReleaseError(
+                "the sealed release does not work at its final path: "
+                f"{[c for c in final['checks'] if not c['ok']]}"
+            )
         log(f"sealed release {commit[:12]}")
         return manifest
     except BaseException:
