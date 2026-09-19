@@ -19,6 +19,9 @@ if TYPE_CHECKING:  # pragma: no cover
 TIMER_UNIT = "rowanjobs.timer"
 SERVICE_UNIT = "rowanjobs.service"
 RETRY_TIMER_UNIT = "rowanjobs-retry.timer"
+#: Mail-only. Inspected so the health output can show when an outstanding
+#: report will next be retried; it never collects.
+NOTIFY_TIMER_UNIT = "rowanjobs-notify.timer"
 RETRY_SERVICE_UNIT = "rowanjobs-retry.service"
 
 
@@ -117,7 +120,7 @@ def timer_status(cfg: Config) -> dict[str, Any]:
         "units": {},
     }
     timers = _list_timers()
-    for unit in (TIMER_UNIT, RETRY_TIMER_UNIT):
+    for unit in (TIMER_UNIT, RETRY_TIMER_UNIT, NOTIFY_TIMER_UNIT):
         props = _show(
             unit,
             [
