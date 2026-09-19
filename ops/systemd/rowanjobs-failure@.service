@@ -1,0 +1,35 @@
+[Unit]
+Description=RowanJobs startup-failure handler for %i
+Documentation=https://github.com/sedlock/RowanJobs
+
+[Service]
+Type=oneshot
+# Deliberately the SYSTEM interpreter running a standard-library-only script,
+# not the application's own entry point. On 2026-09-18 a configuration-schema
+# mismatch made rowanjobs exit before it opened a run row: the archive recorded
+# nothing and no report went out. A detector that imports the configuration
+# parser it is monitoring cannot report that the parser is broken.
+ExecStart=/usr/bin/python3 __APP_DIR__/ops/onfailure.py %i
+WorkingDirectory=__DATA_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=ROWANJOBS_CONFIG=__CONFIG__
+Environment=ROWANJOBS_DATA_ROOT=__DATA_ROOT__
+Environment=TZ=UTC
+Environment=TMPDIR=/tmp
+
+TimeoutStartSec=3min
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DATA_ROOT__
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rowanjobs-failure

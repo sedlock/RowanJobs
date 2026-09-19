@@ -1,0 +1,47 @@
+[Unit]
+Description=RowanJobs outstanding run-report delivery
+Documentation=https://github.com/sedlock/RowanJobs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Mail only. This never collects: it creates no run, contacts no source, and
+# its worst case is a late email. Without a scheduled caller, a report that
+# failed to send would sit pending until the next collection happened to sweep
+# it -- which is not a retry policy, it is a coincidence.
+ExecStart=__VENV__/bin/rowanjobs --json notify
+WorkingDirectory=__DATA_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ROWANJOBS_CONFIG=__CONFIG__
+Environment=ROWANJOBS_DATA_ROOT=__DATA_ROOT__
+Environment=TZ=UTC
+Environment=TMPDIR=/tmp
+
+TimeoutStartSec=10min
+# Exit 2 means reports are still outstanding and will be retried in the next
+# window. That is the mechanism working, not a unit failure.
+SuccessExitStatus=0 2
+
+Nice=15
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DATA_ROOT__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rowanjobs-notify

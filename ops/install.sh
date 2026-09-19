@@ -68,8 +68,10 @@ say "applying schema migrations"
 
 # --------------------------------------------------------------------- units
 install -d -m 755 "$UNIT_DIR"
-for unit in rowanjobs.service rowanjobs.timer rowanjobs-retry.service rowanjobs-retry.timer; do
+for unit in rowanjobs.service rowanjobs.timer rowanjobs-retry.service rowanjobs-retry.timer \
+            rowanjobs-notify.service rowanjobs-notify.timer 'rowanjobs-failure@.service'; do
   sed -e "s|__VENV__|$VENV|g" \
+      -e "s|__APP_DIR__|$REPO_ROOT|g" \
       -e "s|__DATA_ROOT__|$DATA_ROOT|g" \
       -e "s|__CONFIG__|$CONFIG_FILE|g" \
       "$REPO_ROOT/ops/systemd/$unit" > "$UNIT_DIR/$unit.tmp"
@@ -90,6 +92,9 @@ systemd-analyze calendar "*-*-* 06:15:00 America/New_York"
 if [[ "$ENABLE" == "1" ]]; then
   systemctl --user enable --now rowanjobs.timer
   systemctl --user enable --now rowanjobs-retry.timer
+  # Mail-only retry. An implemented notify command with no scheduled caller is
+  # not a retry policy.
+  systemctl --user enable --now rowanjobs-notify.timer
   say "timers enabled"
 fi
 
@@ -105,6 +110,7 @@ fi
     record-deployment --note "ops/install.sh"
 
 say "next activation:"
-systemctl --user list-timers rowanjobs.timer rowanjobs-retry.timer --no-pager || true
+systemctl --user list-timers rowanjobs.timer rowanjobs-retry.timer \
+    rowanjobs-notify.timer --no-pager || true
 
 say "done. Check with:  rowanjobs doctor"

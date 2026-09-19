@@ -1,0 +1,16 @@
+[Unit]
+Description=RowanJobs retry window for run reports that were never accepted
+Documentation=https://github.com/sedlock/RowanJobs
+
+[Timer]
+Unit=rowanjobs-notify.service
+# Hourly, offset off the hour so it never contends with the 06:15/09:15/13:15
+# collection windows. A provider outage therefore costs a late report, not a
+# lost one, and recovery needs no second harvest.
+OnCalendar=*-*-* *:40:00 America/New_York
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

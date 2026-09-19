@@ -6,6 +6,12 @@ Documentation=https://github.com/sedlock/RowanJobs
 After=network-online.target
 Wants=network-online.target
 
+# If this unit fails -- including before the application can open a database
+# run row -- hand the fact to an independent handler. Without this, a startup
+# failure is visible only in the journal, which is how 2026-09-18 passed
+# unnoticed until someone went looking.
+OnFailure=rowanjobs-failure@%n.service
+
 [Service]
 Type=oneshot
 # Absolute, resolved paths. No "~", no shell expansion, no activated virtualenv:

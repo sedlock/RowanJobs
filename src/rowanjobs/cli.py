@@ -363,6 +363,49 @@ def cmd_retry(args: argparse.Namespace) -> int:
     return cmd_collect(args)
 
 
+# -------------------------------------------------------------------- health
+
+
+def cmd_health(args: argparse.Namespace) -> int:
+    """Emit the ControlPanel status contract. Read-only, and only ever read-only.
+
+    ControlPanel polls this once a minute. It must therefore never collect,
+    never send mail, never migrate and never write to the archive -- a console
+    asking how things are going cannot be allowed to change how they are going.
+    The archive is opened read-only, which makes that a property of the
+    connection rather than a promise in a docstring.
+    """
+    from .ops.cpstatus import build_status
+
+    cfg = _config_from(args)
+    try:
+        db = _open_ro(cfg)
+    except FileNotFoundError as exc:
+        # A console must get a parseable answer even before the first
+        # migration, and "unknown" is the honest one.
+        unavailable = {
+            "schema_version": "controlpanel.status.v1",
+            "project": "rowanjobs",
+            "display_name": "RowanJobs",
+            "observed_at": utc_str(),
+            "overall": {"health": "unknown", "summary": str(exc)},
+            "components": [],
+            "metrics": {},
+            "recent_runs": [],
+            "errors": [str(exc)],
+        }
+        emit(unavailable, True)
+        return EXIT_USAGE
+    try:
+        document = build_status(cfg, db, include_timer=not args.no_timer)
+    finally:
+        db.close()
+
+    emit(document, True)
+    overall: dict[str, Any] = document["overall"]
+    return {"failed": EXIT_FAILED, "degraded": EXIT_DEGRADED}.get(str(overall["health"]), EXIT_OK)
+
+
 # -------------------------------------------------------------------- notify
 
 
@@ -1325,6 +1368,20 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument("--test", action="store_true", help="send a delivery test; records nothing")
     notify.set_defaults(func=cmd_notify)
 
+    health = sub.add_parser(
+        "health",
+        parents=[shared],
+        help="ControlPanel status contract (read-only; never collects or sends)",
+    )
+    health.add_argument("--no-timer", action="store_true", help="skip systemd inspection")
+    health.add_argument(
+        "--pretty", action="store_true", help="accepted for symmetry with other adapters"
+    )
+    # Deliberately no `json=True` default here: argparse would apply it to every
+    # other subcommand too, turning `status` and `doctor` into JSON emitters.
+    # cmd_health always emits the machine contract regardless of the flag.
+    health.set_defaults(func=cmd_health)
+
     status = sub.add_parser("status", parents=[shared], help="operational state")
     status.add_argument("--no-timer", action="store_true", help="skip systemd inspection")
     status.set_defaults(func=cmd_status)
@@ -1412,7 +1469,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _normalise(argv: list[str]) -> list[str]:
+    """Accept ``rowanjobs --health`` as a spelling of ``rowanjobs health``.
+
+    The subcommand is the canonical form and the one ControlPanel is
+    registered with. This exists because ``--health`` is the obvious thing to
+    type for a one-shot probe, and a monitoring interface that answers "usage
+    error" to the obvious spelling is a monitoring interface people stop
+    trusting.
+    """
+    if "--health" not in argv:
+        return argv
+    rest = [item for item in argv if item != "--health"]
+    return ["health", *rest]
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = _normalise(list(sys.argv[1:] if argv is None else argv))
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
